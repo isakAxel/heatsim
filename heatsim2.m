@@ -50,7 +50,8 @@ function [T]=heatsim2(Ep,I_beam,t_pulse,pulse_frequency_,n_pulses,sigma_x,sigma_
 %
 %     u(n) = (I-k/2F1)^(-1)((I+k/2Lh)(I-k/2Lh)^(-1)(I+k/2F1)u(n-1) + 
 %                              (I-k/2Lh)^(-1)(k/2(F2((n-1)k)+F2(nk)))
-%
+%           1 missing term here ?
+%           Yes it is missing but the actual function is correct
 % where Lh is the discrete Laplacian (matrix), n=1,...,N, and u(0)=0. 
 %
 % The approximation u will be organized as an (M^2)x(p(N+1))-matrix, i.e., 
