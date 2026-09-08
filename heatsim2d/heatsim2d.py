@@ -8,12 +8,12 @@ from scipy.sparse.linalg import spsolve
 ### Units 
 MeV = 1e6
 mA = 1e-3
-
+### Parameter sensitivity issue
 def define_parameters (Ep = 90, 
                         material = 'Cu',
-                        p_freq = 1/3,
+                        p_freq = 14,
                         p = 10,
-                        t_pulse = 0.2,
+                        t_pulse = 0.002,
                         I_beam = 65 * mA,
                         sigma_x = 2,
                         sigma_y = 2,
@@ -28,7 +28,7 @@ def define_parameters (Ep = 90,
     Basic configuration of parameters preset as default, add input to define_parameters to change setup.
 
     """
-    dS_,rho_,Cp_ = import_PSTAR_data(material,Ep,0)
+    dS_,rho_,Cp_     = import_PSTAR_data(material,Ep,0)
     ### Overwrite from report #FIXME
     ### very hardcoded
     dS_,rho_,Cp_ = 1.67,8.9,0.44
@@ -207,10 +207,6 @@ if __name__ == "__main__":
         f"T0 : {T0}\n",)
 
 
-    # for p in par:
-    #     print(f"{p=}")
-
-    # F2(0.01,M,h,L,rho,dEdx,Ib,sigma_x,sigma_y)
     
     # Creating Linear operators I and discrete Laplaceian Lh
     I = sparse.eye_array(M**2,M**2)
@@ -221,6 +217,8 @@ if __name__ == "__main__":
     u = sparse.lil_array((M**2,p*2*N+1), dtype=np.float32)
 
     # u_0 first row in u is already set since IV = [0..0]
+    print("Peak F2 rate (K/s):", np.max(F2(0, par).toarray()))
+    # exit()
 
     for i in range(p):
 
@@ -229,14 +227,13 @@ if __name__ == "__main__":
         print(f"Max Temperature is : {np.max(u.toarray())}")
 
         w = sparse.lil_array((M**2,2*N+1))
-        # This will need to change with 0-idx #potential BUG
-        # print("w shape: ", w[:,0].toarray().shape)
-
-        # print("u shape: ", u[:,(i-1)*2*N + 1 ].toarray().shape)
-        w[:,0] = u[:,(i-1)*2*N + 1 ].toarray()
+        # This one has to be right
+        w[:,0] = u[:,(i)*2*N  ].toarray()
+        # WRONG WRONG WRONG
+        # w[:,0] = u[:,(i-1)*2*N+1].toarray()
 
         # Pulse step #i
-        k = k_pulse
+        par[3] = k = k_pulse
 
         for n in range(N):
             wn = w[:,n].tocsr()
@@ -249,7 +246,7 @@ if __name__ == "__main__":
             
 
         # Pause step #i
-        k = k_pause
+        par[3] = k = k_pause
         for n in range(N,2*N):
             ### Convert to csr to improve flops/sec
             wn = w[:,n].tocsr()
@@ -258,7 +255,6 @@ if __name__ == "__main__":
 
        
         u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
-        print(u[:,((i)*2*N+1):((i+1)*2*N+1)])
 
     ##### Temporary plot to see results ####
     
@@ -269,7 +265,6 @@ if __name__ == "__main__":
 
     mat[1:M+1,1:M+1] = u[:,-1].toarray().reshape(M,M)
 
-    print("types: ", type(u), u.toarray().dtype)
     plt.imshow(u.toarray(), cmap = 'hot',interpolation = 'nearest')
     plt.xlabel("Time axis")
     plt.ylabel("heat development")
