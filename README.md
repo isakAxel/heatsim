@@ -11,9 +11,9 @@ heatsim is developed in connection to a Master Thesis project at ESS and the LTH
 ## Installation
 
 To use heatsim, simply clone the repo and use packeage manager pip to install dependencies. 
-'''bash 
+´´´bash 
 pip install -r requirements.txt
-'''
+´´´
 
 
 
