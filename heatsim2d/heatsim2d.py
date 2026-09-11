@@ -2,17 +2,18 @@ from utils import import_PSTAR_data
 from functools import wraps
 import numpy as np
 import matplotlib.pyplot as plt
+from collections.abc import Callable    
 from scipy import sparse,linalg,optimize
 from scipy.sparse.linalg import spsolve
 
 ### Units 
 MeV = 1e6
 mA = 1e-3
-### Parameter sensitivity issue
+
 def define_parameters (Ep = 90, 
                         material = 'Cu',
                         p_freq = 14,
-                        p = 10,
+                        p = 10,                  # change to 2 to see behaviour
                         t_pulse = 0.002,
                         I_beam = 65 * mA,
                         sigma_x = 2,
@@ -21,29 +22,67 @@ def define_parameters (Ep = 90,
                         D = 0.4,
                         L = 10,
                         T0 = 300,
+                        gamma = 5.0,
                         plot_option = 1
                         ):
 
     """
     Basic configuration of parameters preset as default, add input to define_parameters to change setup.
+    
+    Parameters:
+        See return values as all parameters are directly returned.
 
+    Returns 
+        ------
+        Ep : float
+            Proton energy
+        material : string
+            Target material
+        p_freq : float
+            Pulse frequency of proton beam
+        p : int
+            Number of pulses to simulate
+        t_pulse : float
+            Total time of 1 pulse
+        I_beam : float
+            Beam current in (mA)
+        sigma_x : float
+            Beam-size in x-direction
+        sigma_y : float
+            Beam-size in y-direction
+        epsilon : float
+            Emissivitiy of surrounding materil bounded to [0,1] 
+        D : float
+            Diffusitiviy constant D
+        L : float
+            Plate length of target
+        T0 : float
+            Initial Temperature (K)
+        gamma : float
+            Heat transfer Coefficient
+        plot_option : int - [0,1]
+            Option to plot, 1 to plot
+    Returns
+        -------
+        par : tuple
+            Tuple of all collected parameters specific to Beam setup and Material
+    
     """
     dS_,rho_,Cp_     = import_PSTAR_data(material,Ep,0)
     ### Overwrite from report #FIXME
     ### very hardcoded
     dS_,rho_,Cp_ = 1.67,8.9,0.44
-    return Ep,material,dS_,rho_,Cp_,p_freq,p,t_pulse,I_beam,sigma_x,sigma_y,epsilon,D,L,T0,plot_option
+    return Ep,material,dS_,rho_,Cp_,p_freq,p,t_pulse,I_beam,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option
 
 #### Material / Controlled parameters ####
 
-Ep,material,dS_,rho_,Cp_,p_freq,p,t_pulse,I_beam,sigma_x,sigma_y,epsilon,D,L,T0,plot_option = define_parameters()
-# eps is wrong # FIXME 
+Ep,material,dS_,rho_,Cp_,p_freq,p,t_pulse,I_beam,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters()
 ##### Physical Parameters ##### 
 tend = p / p_freq                   # total time (s)
 rho = rho_                          # Blades-Nickel (g/cm^3)
 C_p = Cp_                           # Blades-Nickel (J/g/K)
 sigma = 5.67037442e-4               # 1e8 * Stefan-Boltzmann constant (W/((cm)^2 K^4)
-#eps = 0.1                          # Blades-Nickel (nounit)
+#epsilon = 0.1                      # Blades-Nickel (nounit)
 A = L**2                            # Area of impact (cm^2)
 t = 0.1                             # thickness of the material (cm) "Wild Guess" #FIXME
 V = A * t                           # Volume (cm^3) 
@@ -53,9 +92,17 @@ t_pulse = t_pulse                   # Pulse duration (s)
 t_pause = (tend - p*t_pulse) / p     # pulse "pause" duration
 
 
-def set_nums(M = 50, N = 50, maxit = 100, tol = 1e-13):
+def set_nums(M = 50, N = 100, maxit = 100, tol = 1e-13):
     """
     
+    Returns : 
+        h (float) : Spatial time step
+        k_pulse : Temporal time step (for fined pulse time)
+        k_pause : Temporal time step for coarse pause time
+        maxit(int) : Maximum iterations for Newton-Raphson algorithm (Added to have a certain stopping criterion)
+        tol(float) : Tolerance set for iterative stopping criteria, mainly for Newton-Raphson iterations
+        M (int) : Number of spatial grid points for spatial discretization
+        N (int) : Number of temporal grid points for time discretization
     """
     
     h = L /(M+1)
@@ -65,7 +112,7 @@ def set_nums(M = 50, N = 50, maxit = 100, tol = 1e-13):
 ### Get Numerical Parameters
 h,k_pulse,k_pause,maxit,tol,M,N = set_nums()
 
-par=[M,h,N,0,maxit,tol,T0,L,tend,rho,C_p, D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y];
+par=[M,h,N,0,maxit,tol,T0,L,tend,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y,gamma];
 
 def use_parameters(*indices):
     """
@@ -74,9 +121,22 @@ def use_parameters(*indices):
     """
     def decorator(func):
         @wraps(func)
-        def wrapper(x,par,*args,**kwargs):
+        def wrapper(*args,**kwargs):
+            ### check if a parameteter index given does not exist in the parameter vector
+            if "par" in kwargs:
+                par = kwargs.pop("par")
+                data_vars = args
+            else:
+                data_vars = args[:-1]
+                par = args[-1]
+
+            if indices and max(indices) >= len(par):
+                raise IndexError(
+                    f"Index {max(indices)} is out of bounds for the vector par of length {len(par)}"
+                )
+            
             sub_par = [par[i] for i in indices]
-            return func(x,*sub_par,*args,**kwargs)
+            return func(*data_vars,*sub_par,**kwargs)
         return wrapper
     return decorator
 
@@ -93,27 +153,25 @@ def DiscLaplaceian(_x,M,h,rho,C_p,D) -> sparse.array[float]:
     Lh = sparse.kronsum(K,K)    ### This calculates kron(K,I) + kron(I,K) according to documentation #CHECK
     return Lh
 
-@use_parameters(1,3,4,5,6,9,10,12,13,14,15)
-def ImkF1(v,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V) -> np.array:
+@use_parameters(1,3,4,5,6,9,10,12,13,14,15,20)
+def ImkF1(v,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma) -> np.array:
     """
     Newtons' method approximation of solution to u in:
             (I - k/2*F1)u = v
     This is done to effectively approximate the inverse, to reduce compute cost. 
 
     """
-    # u = v
 
     if hasattr(v, "toarray"):
         u = v = v.toarray()  
     else:
         u =  v
-        
-    norm_du = tol
+
     ### TODO: Use scipy.optimize for this instead of implementing ones own, -> more flex
     for i in range(maxit):
         # Function and derivative values
-        F1u = F1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V)
-        dF1u = dF1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V)
+        F1u = F1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V,gamma)
+        dF1u = dF1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V,gamma)
         # Step update
         du = (u-k/2*F1u.toarray()-v) / (1-k/2 * dF1u.toarray())
         u = u - du
@@ -121,11 +179,44 @@ def ImkF1(v,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V) -> np.array:
         norm_du = h**(1/2)*linalg.norm(du,2)
         if norm_du < tol :
             break
-    
     return u
 
-@use_parameters(6,9,10,12,13,14,15)
-def F1(v,T0,rho,C_p,sigma,epsilon,A,V) -> sparse.array:
+@use_parameters(1,3,4,5,6,9,10,12,13,14,15,20)
+def ImLhF1(v,Lh,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma):
+    """
+    Newton-Raphson method approximation of solution to u in : 
+            (I - L*k - k*F1)u = v
+    This is done to approximate the inverse of nonlinear function.
+    """
+
+    if hasattr(v, "toarray"):
+        u = v = v.toarray()
+    else:
+        u = v 
+
+    I = sparse.eye_array(M**2,M**2)
+    
+    for i in range(maxit):
+        F1u = F1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V,gamma)         
+        dF1u = dF1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V,gamma)
+
+        fu = (I - Lh*k)@u -k*F1u - v
+        
+
+        D_array = sparse.diags_array(dF1u.toarray(), offsets=0, format='csr')
+        jacobian = (I - Lh*k - k * D_array)
+
+        du = spsolve(jacobian,fu)
+        u = u - du
+        norm_du = h**(1/2)*linalg.norm(du,2)                    # Factor of h**1/2 wrong ? TODO
+        if norm_du < tol:
+            break
+    
+    return u
+        
+
+@use_parameters(6,9,10,12,13,14,15,20)
+def F1(v,T0,rho,C_p,sigma,epsilon,A,V,gamma) -> sparse.array:
     """
     Evaluates F1 -radiation term given by Stefan-Boltzmann Law
 
@@ -137,15 +228,13 @@ def F1(v,T0,rho,C_p,sigma,epsilon,A,V) -> sparse.array:
     if hasattr(v, "toarray"):
         v = v.toarray()
     C = sigma*epsilon*A/V/rho/C_p 
+    c_newton = gamma * A /rho /C_p/V
     T0 = float(T0)
-    ### terms in f1
-    # print("terms in f1")
-    # print("shape, ", (((v+T0)/100.0)**4-(T0/100.0)**4).shape)
-    u = (C*(((v+T0)/100.0)**4-(T0/100.0)**4))
+    u = -(C*(((v+T0)/100.0)**4-(T0/100.0)**4)) - c_newton * v
     return sparse.csr_array(u)
 
 @use_parameters(6,9,10,12,13,14,15)
-def dF1(v,T0,rho,C_p,sigma,epsilon,A,V) -> sparse.array:
+def dF1(v,T0,rho,C_p,sigma,epsilon,A,V,gamma) -> sparse.array:
     """
     Evaluates the derivate wrt to v of F1(v)-radiation term
 
@@ -153,10 +242,12 @@ def dF1(v,T0,rho,C_p,sigma,epsilon,A,V) -> sparse.array:
     if hasattr(v, "toarray"):
         v = v.toarray()
     C = sigma*epsilon*A/V/rho/C_p
-    u = -4*C*((v + T0)/100)**3    ### Element wise power
+    c_newton = gamma*A/rho/C_p/V
+    u = -4*C*((v + T0)/100)**3 * 1/100   ### Element wise power ### extra factor 100 here
     # print(type(u), "Tihs is the type df1")
-    
+    u = u - c_newton
     return sparse.csr_array(u)
+
 @use_parameters(0,1,7,9,10,16,17,18,19)
 def F2(s,M,h,L,rho,C_p,dEdx,Ib,sigma_x,sigma_y):
     """
@@ -186,51 +277,60 @@ def F2(s,M,h,L,rho,C_p,dEdx,Ib,sigma_x,sigma_y):
     dP = rho * dEdx * Ib / sigma_x / sigma_y/2/np.pi * np.exp(-((x-cx)**2/2/sigma_x**2)-((y-cy)**2/2/sigma_y**2))
     u = np.reshape(dP,(M**2,)) / rho / C_p
     return sparse.csr_array(u)
+
+
+"""
+This function is misplace right now
+"""
+@use_parameters(6,7,9,10,11,12,13,14,15,16,17,18,19,20)
+def compute_coeffs(n_dU,T_end,T0,L,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y,gamma):
+
+    # Testing for various \Delta U Values
+
+    dU = np.linspace(0.0,float(T_end),n_dU)
+    dU[0] += 1
+    # print(dU)
+    t = A / V
+
+    ### Could write these c_bolt and c_newton depending on \epsilon and \gamma ? 
+    ### 
+    coeffs = {"dU" : dU.tolist(),
+              "c_pulse" : (L**4 * dEdx * Ib / ( D**2*dU*C_p*2*np.pi*sigma_x*sigma_y)).tolist(),
+              "c_Bolt" : (sigma * dU**3 * L ** 2 / (rho * C_p * t / D)).tolist(),
+              "c_newton" :[ L**2 / (rho*C_p*t*D)] * len(dU),             # Does not depened on dU explicitly
+              "Theta0" : (T0 / dU).tolist()
+              }
+    coeffs["c_laplace"] = [1]*len(dU) 
+    return coeffs
+
+
+def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,sparse.csr_array],F2 : Callable[...,sparse.csr_array],par):
+    """
+    Solves the system for u with the Modified Peaceman-Rachford scheme (TODO should reference here) 
     
+    Params:
+        u_0 (np.array) (M^2,) : Initial temperature array to initizialize the solves 
+        Laplaceh (sparse.dia_array) : Discrete Laplacian of the system - a (M**2)x(M**2) matrix.
+        F1 (function) : Non-linear reaction function
+        F2 (function) : Time-dependant reaction function (Beam term)
+        par (list) : Vector of all parameters.      
+    Returns:
 
-if __name__ == "__main__":
-    
-    ### Printing parameters for simulation
-    print( "---------- Parameters for Simulation -------------\n",
-        f"Pulse period : {1/p_freq} \n",
-        f"Pulse frequency : {p_freq:.2f} \n",
-        f"Pulse length : {t_pulse} \n",
-        f"Energy : {Ep} \n",
-        f"Time without pulse (Pause length): {t_pause}\n",
-        f"--- Beam and Power --- \n",
-        f"Density rho : {rho}\n",
-        f"Specific Heat Cp: {C_p}\n",
-        f"Stopping power dEdx: {dEdx:.2E}\n",
-        f"Peak current Ib : {Ib}\n",
-        f"Sigmax : {sigma_x} \n",
-        f"Sigmay : {sigma_y} \n",
-        f"T0 : {T0}\n",)
-
-
-    
-    # Creating Linear operators I and discrete Laplaceian Lh
-    I = sparse.eye_array(M**2,M**2)
-    Lh = DiscLaplaceian(1,par)
-
-    # Computing approximation
-    # Comment: using lil_array now not sure what is best
+    """
     u = sparse.lil_array((M**2,p*2*N+1), dtype=np.float32)
-
-    # u_0 first row in u is already set since IV = [0..0]
-    print("Peak F2 rate (K/s):", np.max(F2(0, par).toarray()))
-    # exit()
+    u[:,0] = u0
+    Lh = Laplaceh
+    I = sparse.eye_array(M**2,M**2)
+    print("----- Modified Peaceman Rachford solver -----")
+    print("--- Progress counter  ---")
 
     for i in range(p):
-
-        print("--- Progress counter  ---")
         print(f"Pulse iteration #{i+1}")
         print(f"Max Temperature is : {np.max(u.toarray())}")
 
         w = sparse.lil_array((M**2,2*N+1))
-        # This one has to be right
         w[:,0] = u[:,(i)*2*N  ].toarray()
-        # WRONG WRONG WRONG
-        # w[:,0] = u[:,(i-1)*2*N+1].toarray()
+        
 
         # Pulse step #i
         par[3] = k = k_pulse
@@ -253,16 +353,106 @@ if __name__ == "__main__":
             v = (I+k/2*Lh)@(spsolve((I-k/2 * Lh),wn +k/2*F1(wn,par)))
             w[:,n+1] = ImkF1(v,par).reshape(M**2,)
 
-       
+        
         u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
 
-    ##### Temporary plot to see results ####
+    return u
+
+def IEBasic(u0,Laplaceh,F1,F2,par):
+    """
+    Solves the system without splitting, using a simple Implicit Euler time stepping scheme
+
+    Params:
+        u_0 (np.array) (M^2,) : Initial temperature array to initizialize the solves 
+        Laplaceh (sparse.dia_array) : Discrete Laplacian of the system - a (M**2)x(M**2) matrix.
+        F1 (function) : Non-linear reaction function
+        F2 (function) : Time-dependant reaction function (Beam term)
+        par (list) : Vector of all parameters.      
+    Returns:
+
+    """
+
+    u = sparse.lil_array((M**2,p*2*N+1), dtype=np.float32)
+    u[:,0] = u0
+    Lh = Laplaceh
+    I = sparse.eye_array(M**2,M**2)
+
+    print("----- Implicit Euler Basic Solver -----")
+    print("--- Progress counter  ---")
+    for i in range(p):
+        print(f"Pulse iteration #{i+1}")
+        print(f"Max Temperature is : {np.max(u.toarray())}")
+
+        w = sparse.lil_array((M**2,2*N+1))
+        w[:,0] = u[:,(i)*2*N  ].toarray()
+
+        # Pulse step #i
+        par[3] = k = k_pulse
+
+        for n in range(N):
+            wn = w[:,n].tocsr()
+            rhs = wn + k * F2(n*k,par)
+            v = ImLhF1(rhs,Lh,par)
+            w[:,n+1] = v.reshape(M**2,)
+
+        # Pause step #i
+        par[3] = k = k_pause
+        for n in range(N,2*N):
+            ### Convert to csr to improve flops/sec
+            wn = w[:,n].tocsr()
+            w[:,n+1] = ImLhF1(wn,Lh,par)
+
+        
+        u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
+
+    return u
+
+if __name__ == "__main__":
     
+    ### Printing parameters for simulation
+    print( "---------- Parameters for Simulation -------------\n",
+        f"Pulse period : {1/p_freq} \n",
+        f"Pulse frequency : {p_freq:.2f} \n",
+        f"Pulse length : {t_pulse} \n",
+        f"Energy : {Ep} \n",
+        f"Time without pulse (Pause length): {t_pause}\n",
+        f"--- Beam and Power --- \n",
+        f"Density rho : {rho}\n",
+        f"Specific Heat Cp: {C_p}\n",
+        f"Stopping power dEdx: {dEdx:.2E}\n",
+        f"Peak current Ib : {Ib}\n",
+        f"Sigmax : {sigma_x} \n",
+        f"Sigmay : {sigma_y} \n",
+        f"T0 : {T0}\n",)
+
+
+    
+    # Creating Linear operators I and discrete Laplaceian Lh
+    Lh = DiscLaplaceian(1,par)
+    
+    # Initial value u_0
+    u0 = np.zeros(M**2)
+    # Running modified PR and IE solver to compare
+    u = IEBasic(u0,Lh,F1,F2,par)    
+    u2 = modPRSolver(u0,Lh,F1,F2,par)
+    ####   
+    ##### Temporary plot to see results ####
+
+    # Arbitrarily chosen temperature vector  
+    uN = u[:,N+1].toarray()
+    u2N = u2[:,N+1].toarray()
+
+    # Absoltute and rel error
+    err2Norm = linalg.norm(uN - u2N, 2) 
+    print(f"Timestep are kpulse:{k_pulse} and kpause = {k_pause}")
+    print(f"Error at Time step N: {err2Norm}")
+    relerr = err2Norm / np.linalg.norm(uN)
+    print(f"Relative L2 Error: {relerr:.4e}")
+
     xs = np.linspace(0,L,M+2)
     x,y = np.meshgrid(xs,xs)
 
     mat = np.zeros((M+2,M+2), dtype = np.float32)
-
     mat[1:M+1,1:M+1] = u[:,-1].toarray().reshape(M,M)
 
     plt.imshow(u.toarray(), cmap = 'hot',interpolation = 'nearest')
