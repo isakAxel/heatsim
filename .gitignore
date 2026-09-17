@@ -10,8 +10,8 @@
 # notes and stuff
 *.txt
 
-# sandbox tool for development
-sandbox
+# sandbox folder with tool for development
+sandbox/
 
 # log files
 .log
