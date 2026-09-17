@@ -1,5 +1,17 @@
+# data folder
 */data
 *__pycache__
+
+# Venv and Env files
 .venv
 .env
+
+
+# notes and stuff
 *.txt
+
+# sandbox tool for development
+sandbox
+
+# log files
+.log
