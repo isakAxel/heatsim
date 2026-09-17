@@ -1,10 +1,11 @@
-from utils import import_PSTAR_data
+from utils.utils import import_PSTAR_data
 from functools import wraps
 import numpy as np
 import matplotlib.pyplot as plt
 from collections.abc import Callable    
 from scipy import sparse,linalg,optimize
 from scipy.sparse.linalg import spsolve
+from utils.profiling import timer,cpuprf
 
 ### Units 
 MeV = 1e6
@@ -305,7 +306,8 @@ def compute_coeffs(n_dU,T_end,T0,L,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,s
     coeffs["c_laplace"] = [1]*len(dU) 
     return coeffs
 
-
+@cpuprf
+@timer(metric="monotonic")
 def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,sparse.csr_array],F2 : Callable[...,sparse.csr_array],par):
     """
     Solves the system for u with the Modified Peaceman-Rachford scheme (TODO should reference here) 
@@ -360,7 +362,8 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
         u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
 
     return u
-
+@cpuprf
+@timer(metric="monotonic")
 def TrapBasic(u0,Laplaceh,F1,F2,par):
     """
     Solves the system without splitting, using a simple Trapezoidal time stepping scheme
@@ -437,8 +440,8 @@ if __name__ == "__main__":
     u0 = np.zeros(M**2)
     # Running modified PR and IE solver to compare
     print(f"CFL Number for simulation: CFL = {k_pause/(h**2)}")
-    u = TrapBasic(u0,Lh,F1,F2,par)    
-    u2 = modPRSolver(u0,Lh,F1,F2,par)
+    u = TrapBasic(u0,Lh,F1,F2,par,cpuprf = True)    
+    u2 = modPRSolver(u0,Lh,F1,F2,par,cpuprf = True)
     ####   
     ##### Temporary plot to see results ####
 
