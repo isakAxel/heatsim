@@ -1,4 +1,4 @@
-from utils import import_PSTAR_data
+from utils.utils import import_PSTAR_data
 from functools import wraps
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +13,7 @@ mA = 1e-3
 def define_parameters (Ep = 90, 
                         material = 'Cu',
                         p_freq = 14,
-                        p = 10,                  # change to 2 to see behaviour
+                        p = 1,                  # change to 2 to see behaviour
                         t_pulse = 0.002,
                         I_beam = 65 * mA,
                         sigma_x = 2,
@@ -55,7 +55,7 @@ def define_parameters (Ep = 90,
         D : float
             Diffusitiviy constant D
         L : float
-            Plate length of target
+            Plate length of target (cm)
         T0 : float
             Initial Temperature (K)
         gamma : float
@@ -123,25 +123,29 @@ def use_parameters(*indices):
         @wraps(func)
         def wrapper(*args,**kwargs):
             ### check if a parameteter index given does not exist in the parameter vector
+            par = None
+            data_vars = args
             if "par" in kwargs:
                 par = kwargs.pop("par")
-                data_vars = args
-            else:
-                data_vars = args[:-1]
-                par = args[-1]
+            elif len(args) > 0 and hasattr(args[-1], "__len__"):
+                if len(args[-1]) > max(indices, default=0):
+                    data_vars = args[:-1]
+                    par = args[-1]
+
+            if par is None:
+                return func(*args, **kwargs)
 
             if indices and max(indices) >= len(par):
                 raise IndexError(
-                    f"Index {max(indices)} is out of bounds for the vector par of length {len(par)}"
+                    f"Index {max(indices)} is out of bounds for parameter vector of length {len(p_vec)}"
                 )
-            
             sub_par = [par[i] for i in indices]
-            return func(*data_vars,*sub_par,**kwargs)
+            return func(*data_vars, *sub_par, **kwargs)
         return wrapper
     return decorator
 
 @use_parameters(0,1,9,10,11)
-def DiscLaplaceian(_x,M,h,rho,C_p,D) -> sparse.array[float]:
+def DiscLaplacian(_x,M,h,rho,C_p,D) -> sparse.array[float]:
     """
     Creating the discrete Laplaceian Lh - an (M**2)x(M**2) matrix
     """
@@ -152,6 +156,17 @@ def DiscLaplaceian(_x,M,h,rho,C_p,D) -> sparse.array[float]:
     K = C/h**2 * sparse.dia_array(([ve,-2*ve,ve],[-1,0,1]),shape = (M,M))
     Lh = sparse.kronsum(K,K)    ### This calculates kron(K,I) + kron(I,K) according to documentation #CHECK
     return Lh
+
+@use_parameters(0,1,9,10,11)
+def DiscLaplacian1D(_x,M,h,rho,C_p,D) -> sparse.array[float]:
+    """
+    Creating discrete Laplacian Lh for 1D - a (M^1 x M^1) matrix
+    """
+    C = D/rho / C_p
+    ve = np.ones(M)
+    K = C/h**2 * sparse.dia_array(([ve,-2*ve,ve],[-1,0,1]),shape = (M,M))
+
+    return K
 
 @use_parameters(1,3,4,5,6,9,10,12,13,14,15,20)
 def ImkF1(v,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma) -> np.array:
@@ -428,7 +443,7 @@ if __name__ == "__main__":
 
     
     # Creating Linear operators I and discrete Laplaceian Lh
-    Lh = DiscLaplaceian(1,par)
+    Lh = DiscLaplacian(1,par)
     
     # Initial value u_0
     u0 = np.zeros(M**2)
