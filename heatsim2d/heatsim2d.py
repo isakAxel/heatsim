@@ -1,4 +1,4 @@
-from heatsim2d.utils.utils import import_PSTAR_data
+from utils.utils import import_PSTAR_data
 from functools import wraps
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +13,7 @@ mA = 1e-3
 def define_parameters (Ep = 90, 
                         material = 'Cu',
                         p_freq = 14,
-                        p = 10,                  # change to 2 to see behaviour
+                        p = 1,                  # change to 2 to see behaviour
                         t_pulse = 0.002,
                         I_beam = 65 * mA,
                         sigma_x = 2,
@@ -443,7 +443,7 @@ if __name__ == "__main__":
 
     
     # Creating Linear operators I and discrete Laplaceian Lh
-    Lh = DiscLaplaceian(1,par)
+    Lh = DiscLaplacian(1,par)
     
     # Initial value u_0
     u0 = np.zeros(M**2)
