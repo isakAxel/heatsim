@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from collections.abc import Callable    
 from scipy import sparse,linalg,optimize
 from scipy.sparse.linalg import spsolve
+from utils.profiling import timer,cpuprf
 
 ### Units 
 MeV = 1e6
@@ -215,7 +216,7 @@ def ImLhF1(v,Lh,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma):
         F1u = F1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V,gamma)         
         dF1u = dF1.__wrapped__(u,T0,rho,C_p,sigma,epsilon,A,V,gamma)
 
-        fu = (I - Lh*k)@u -k*F1u - v
+        fu = (I - Lh*k/2)@u -k/2*F1u - v
         
 
         D_array = sparse.diags_array(dF1u.toarray(), offsets=0, format='csr')
@@ -285,7 +286,9 @@ def F2(s,M,h,L,rho,C_p,dEdx,Ib,sigma_x,sigma_y):
     # ry = L/25*(2*np.rand.uniform()-1)
     # range [-L/25,L/25]
     ### Randomly centered at cx, cy
-    rx,ry = np.random.uniform(-L/25,L/25,2)
+    # rx,ry = np.random.uniform(-L/25,L/25,2)
+    rx = 0
+    ry = 0
     cx = L/2 + rx
     cy = L/2 + ry
 
@@ -318,7 +321,8 @@ def compute_coeffs(n_dU,T_end,T0,L,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,s
     coeffs["c_laplace"] = [1]*len(dU) 
     return coeffs
 
-
+@cpuprf
+@timer(metric="monotonic")
 def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,sparse.csr_array],F2 : Callable[...,sparse.csr_array],par):
     """
     Solves the system for u with the Modified Peaceman-Rachford scheme (TODO should reference here) 
@@ -332,7 +336,7 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
     Returns:
 
     """
-    u = sparse.lil_array((M**2,p*2*N+1), dtype=np.float32)
+    u = np.zeros((M**2,p*2*N+1), dtype=np.float32)
     u[:,0] = u0
     Lh = Laplaceh
     I = sparse.eye_array(M**2,M**2)
@@ -341,41 +345,43 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
 
     for i in range(p):
         print(f"Pulse iteration #{i+1}")
-        print(f"Max Temperature is : {np.max(u.toarray())}")
 
-        w = sparse.lil_array((M**2,2*N+1))
-        w[:,0] = u[:,(i)*2*N  ].toarray()
+        w = np.zeros((M**2,2*N+1))
+        w[:,0] = u[:,(i)*2*N]
         
 
         # Pulse step #i
         par[3] = k = k_pulse
 
         for n in range(N):
-            wn = w[:,n].tocsr()
-           
-            rhs = wn + k/2*F1(wn,par)+k/2*(F2((n-1)*k,par)+F2(n*k,par))
-            v = (I+k/2*Lh)@(spsolve(I-k/2 * Lh,rhs))
-            
-            res = ImkF1(v,par)
-            w[:,n+1] = res.reshape(M**2,)
-            
+            wn = w[:,n]
+            rhs = (I + k/2*Lh)@wn+k/2*(F2((n-1)*k,par)+F2(n*k,par))
+            w[:,n+1] = spsolve(I-k/2*Lh,rhs)
+
+            # wn = w[:,n]
+            # rhs = (I + k/2*Lh)@wn+k/2*(F2((n-1)*k,par)+F2(n*k,par))
+            # v = spsolve(I-k/2*Lh,rhs)
+            # # res = ImkF1(v,par)
+            # w[:,n+1] = res.reshape(M**2,)
+                        
 
         # Pause step #i
         par[3] = k = k_pause
         for n in range(N,2*N):
             ### Convert to csr to improve flops/sec
-            wn = w[:,n].tocsr()
+            wn = w[:,n]
             v = (I+k/2*Lh)@(spsolve((I-k/2 * Lh),wn +k/2*F1(wn,par)))
             w[:,n+1] = ImkF1(v,par).reshape(M**2,)
 
-        
+        print(f"Max Temperature is under pulse is : {np.max(w)}")
         u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
 
     return u
-
-def IEBasic(u0,Laplaceh,F1,F2,par):
+@cpuprf
+@timer(metric="monotonic")
+def TrapBasic(u0,Laplaceh,F1,F2,par):
     """
-    Solves the system without splitting, using a simple Implicit Euler time stepping scheme
+    Solves the system without splitting, using a simple Trapezoidal time stepping scheme
 
     Params:
         u_0 (np.array) (M^2,) : Initial temperature array to initizialize the solves 
@@ -386,38 +392,38 @@ def IEBasic(u0,Laplaceh,F1,F2,par):
     Returns:
 
     """
-
-    u = sparse.lil_array((M**2,p*2*N+1), dtype=np.float32)
+    u = np.zeros((M**2,p*2*N+1), dtype=np.float32)
     u[:,0] = u0
     Lh = Laplaceh
     I = sparse.eye_array(M**2,M**2)
 
-    print("----- Implicit Euler Basic Solver -----")
+    print("----- Trapezoidal Basic Solver -----")
     print("--- Progress counter  ---")
     for i in range(p):
         print(f"Pulse iteration #{i+1}")
-        print(f"Max Temperature is : {np.max(u.toarray())}")
 
-        w = sparse.lil_array((M**2,2*N+1))
-        w[:,0] = u[:,(i)*2*N  ].toarray()
+        ### TODO : Still unsure if w and u could be sparse / not
+        w = np.zeros((M**2,2*N+1))
+        w[:,0] = u[:,(i)*2*N]
 
         # Pulse step #i
         par[3] = k = k_pulse
 
         for n in range(N):
-            wn = w[:,n].tocsr()
-            rhs = wn + k * F2(n*k,par)
-            v = ImLhF1(rhs,Lh,par)
-            w[:,n+1] = v.reshape(M**2,)
+            wn = w[:,n]
+            rhs = (I + k/2*Lh)@wn + k*F2(n*k,par)
+            w[:,n+1] = spsolve(I - Lh*k/2,rhs)
+           
 
         # Pause step #i
         par[3] = k = k_pause
         for n in range(N,2*N):
-            ### Convert to csr to improve flops/sec
-            wn = w[:,n].tocsr()
-            w[:,n+1] = ImLhF1(wn,Lh,par)
+            wn = w[:,n]
+            rhs = (I + k/2*Lh)@wn + k/2 *F1(wn,par)
+            w[:,n+1] = ImLhF1(rhs,Lh,par)
 
         
+        print(f"Max Temperature is under pulse is : {np.max(w)}")
         u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
 
     return u
@@ -448,17 +454,18 @@ if __name__ == "__main__":
     # Initial value u_0
     u0 = np.zeros(M**2)
     # Running modified PR and IE solver to compare
-    u = IEBasic(u0,Lh,F1,F2,par)    
-    u2 = modPRSolver(u0,Lh,F1,F2,par)
+    print(f"CFL Number for simulation: CFL = {k_pause/(h**2)}")
+    u = TrapBasic(u0,Lh,F1,F2,par,cpuprf = True)    
+    u2 = modPRSolver(u0,Lh,F1,F2,par,cpuprf = True)
     ####   
     ##### Temporary plot to see results ####
 
     # Arbitrarily chosen temperature vector  
-    uN = u[:,N+1].toarray()
-    u2N = u2[:,N+1].toarray()
+    uN = u[:,N+1]
+    u2N = u2[:,N+1]
 
-    # Absoltute and rel error
-    err2Norm = linalg.norm(uN - u2N, 2) 
+    # # Absoltute and rel error
+    err2Norm = linalg.norm(uN - u2N, 2) * h 
     print(f"Timestep are kpulse:{k_pulse} and kpause = {k_pause}")
     print(f"Error at Time step N: {err2Norm}")
     relerr = err2Norm / np.linalg.norm(uN)
@@ -468,17 +475,20 @@ if __name__ == "__main__":
     x,y = np.meshgrid(xs,xs)
 
     mat = np.zeros((M+2,M+2), dtype = np.float32)
-    mat[1:M+1,1:M+1] = u[:,-1].toarray().reshape(M,M)
-
-    plt.imshow(u.toarray(), cmap = 'hot',interpolation = 'nearest')
-    plt.xlabel("Time axis")
-    plt.ylabel("heat development")
-    plt.show()    
+    mat[1:M+1,1:M+1] = u[:,-1].reshape(M,M)
+    
     if plot_option:
+        u_yt = u.reshape((M,M,-1)) [ M//2 ,: , :] # will have shape [M,N]
+        plt.imshow(u_yt, cmap = 'jet',interpolation = 'nearest')
+        plt.colorbar(label='Temperature')
+        plt.xlabel("Time axis")
+        plt.ylabel("Y-dimension")
+        plt.title("Heat development over time")
+        plt.show()    
         # fig,ax = plt.subplots()
         # ax.set_title(rf'Heat distribution $\delta$ T')
         plt.figure(figsize=(8,6))
-        plt.imshow(mat,cmap = 'hot',interpolation= 'nearest')
+        plt.imshow(mat,cmap = 'jet',interpolation= 'nearest')
         # plt.title('Heat distribution of Target material')
         plt.colorbar()
         plt.show()
