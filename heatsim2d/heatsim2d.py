@@ -1,4 +1,4 @@
-from utils import import_PSTAR_data
+from heatsim2d.utils.utils import import_PSTAR_data
 from functools import wraps
 import numpy as np
 import matplotlib.pyplot as plt
