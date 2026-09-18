@@ -14,7 +14,7 @@ mA = 1e-3
 def define_parameters (Ep = 90, 
                         material = 'Cu',
                         p_freq = 14,
-                        p = 1,                  # change to 2 to see behaviour
+                        p = 10,                  # change to 2 to see behaviour
                         t_pulse = 0.002,
                         I_beam = 65 * mA,
                         sigma_x = 2,
@@ -93,7 +93,7 @@ t_pulse = t_pulse                   # Pulse duration (s)
 t_pause = (tend - p*t_pulse) / p     # pulse "pause" duration
 
 
-def set_nums(M = 50, N = 100, maxit = 100, tol = 1e-13):
+def set_nums(M = 50, N = 50, maxit = 100, tol = 1e-13):
     """
     
     Returns : 
