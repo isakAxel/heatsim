@@ -201,7 +201,7 @@ def ImkF1(v,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma) -> np.array:
 def ImLhF1(v,Lh,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma):
     """
     Newton-Raphson method approximation of solution to u in : 
-            (I - L*k - k*F1)u = v
+            (I - L*k/2  k/2*F1)u = v
     This is done to approximate the inverse of nonlinear function.
     """
 
@@ -220,7 +220,7 @@ def ImLhF1(v,Lh,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,A,V,gamma):
         
 
         D_array = sparse.diags_array(dF1u.toarray(), offsets=0, format='csr')
-        jacobian = (I - Lh*k - k * D_array)
+        jacobian = (I - Lh*k/2 - k/2 * D_array)
 
         du = spsolve(jacobian,fu)
         u = u - du
