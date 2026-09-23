@@ -93,25 +93,38 @@ t_pulse = t_pulse                   # Pulse duration (s)
 t_pause = (tend - p*t_pulse) / p     # pulse "pause" duration
 
 
-def set_nums(M = 50, N = 50, maxit = 100, tol = 1e-13):
+def set_nums(N = 50, maxit = 100, tol = 1e-13):
     """
-    
+    Sets up temporal and newton iteration parameters.
+
     Returns : 
-        h (float) : Spatial time step
         k_pulse : Temporal time step (for fined pulse time)
         k_pause : Temporal time step for coarse pause time
         maxit(int) : Maximum iterations for Newton-Raphson algorithm (Added to have a certain stopping criterion)
         tol(float) : Tolerance set for iterative stopping criteria, mainly for Newton-Raphson iterations
-        M (int) : Number of spatial grid points for spatial discretization
         N (int) : Number of temporal grid points for time discretization
     """
-    
-    h = L /(M+1)
+    # TODO h is not constant! extract the spatial parameters in another function.
+    # h = L /(M+1)
     kpulse = t_pulse/N
     kpause = t_pause/N
-    return h,kpulse,kpause,maxit,tol,M,N
+    return kpulse,kpause,maxit,tol,int(N)
+
+def set_xspace(Lx,Mx = 50):
+    """
+    Sets spatial numerical parameters for x direction
+
+    Returns:
+        hx (float) : Spatial time step in x direction
+        Mx (int) : Number of spatial grid points for spatial discretization in x direction
+
+    """
+    hx = Lx /(Mx+1)
+    return hx,Mx
+
 ### Get Numerical Parameters
-h,k_pulse,k_pause,maxit,tol,M,N = set_nums()
+k_pulse,k_pause,maxit,tol,N = set_nums()
+h,M = set_xspace(L)
 
 par=[M,h,N,0,maxit,tol,T0,L,tend,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y,gamma];
 
@@ -138,7 +151,7 @@ def use_parameters(*indices):
 
             if indices and max(indices) >= len(par):
                 raise IndexError(
-                    f"Index {max(indices)} is out of bounds for parameter vector of length {len(p_vec)}"
+                    f"Index {max(indices)} is out of bounds for parameter vector of length {len(par)}"
                 )
             sub_par = [par[i] for i in indices]
             return func(*data_vars, *sub_par, **kwargs)
