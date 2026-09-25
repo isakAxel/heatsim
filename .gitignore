@@ -1,5 +1,6 @@
 # data folder
 */data
+data
 *__pycache__
 
 # Venv and Env files
@@ -14,4 +15,4 @@
 sandbox*
 
 # log files
-.log
+*.log

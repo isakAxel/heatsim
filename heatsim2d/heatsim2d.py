@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections.abc import Callable    
 from scipy import sparse,linalg,optimize
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import spsolve,splu
 from utils.profiling import timer,cpuprf
 
 ### Units 
@@ -13,7 +13,7 @@ mA = 1e-3
 
 def define_parameters (Ep = 90, 
                         material = 'Cu',
-                        p_freq = 14,
+                        p_freq = 1,
                         p = 10,                  # change to 2 to see behaviour
                         t_pulse = 0.002,
                         I_beam = 65 * mA,
@@ -110,7 +110,7 @@ def set_nums(N = 50, maxit = 100, tol = 1e-13):
     kpause = t_pause/N
     return kpulse,kpause,maxit,tol,int(N)
 
-def set_xspace(Lx,Mx = 50):
+def set_xspace(Lx,Mx = 100):
     """
     Sets spatial numerical parameters for x direction
 
@@ -124,7 +124,7 @@ def set_xspace(Lx,Mx = 50):
 
 ### Get Numerical Parameters
 k_pulse,k_pause,maxit,tol,N = set_nums()
-h,M = set_xspace(L)
+h,M = set_xspace(L,Mx = 512)
 
 par=[M,h,N,0,maxit,tol,T0,L,tend,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y,gamma];
 
@@ -355,7 +355,7 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
     I = sparse.eye_array(M**2,M**2)
     print("----- Modified Peaceman Rachford solver -----")
     print("--- Progress counter  ---")
-
+    lu = splu((I - k_pause/2*Lh).tocsc())
     for i in range(p):
         print(f"Pulse iteration #{i+1}")
 
@@ -365,12 +365,13 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
 
         # Pulse step #i
         par[3] = k = k_pulse
-
+        # heating cycle
         for n in range(N):
             wn = w[:,n]
-            rhs = (I + k/2*Lh)@wn+k/2*(F2((n-1)*k,par)+F2(n*k,par))
-            w[:,n+1] = spsolve(I-k/2*Lh,rhs)
-
+            # rhs = (I + k/2*Lh)@wn+k/2*(F2((n-1)*k,par)+F2(n*k,par))
+            # w[:,n+1] = spsolve(I-k/2*Lh,rhs)
+            w[:,n+1] = k*F2(n*k,par) + wn
+            
             # wn = w[:,n]
             # rhs = (I + k/2*Lh)@wn+k/2*(F2((n-1)*k,par)+F2(n*k,par))
             # v = spsolve(I-k/2*Lh,rhs)
@@ -380,10 +381,13 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
 
         # Pause step #i
         par[3] = k = k_pause
+        # lu = splu((I - k/2*Lh).tocsc())
         for n in range(N,2*N):
             ### Convert to csr to improve flops/sec
             wn = w[:,n]
-            v = (I+k/2*Lh)@(spsolve((I-k/2 * Lh),wn +k/2*F1(wn,par)))
+            # v = (I+k/2*Lh)@(spsolve((I-k/2 * Lh),wn +k/2*F1(wn,par)))
+            v = (I+k/2*Lh)@(lu.solve(wn +k/2*F1(wn,par)))
+
             w[:,n+1] = ImkF1(v,par).reshape(M**2,)
 
         print(f"Max Temperature is under pulse is : {np.max(w)}")
@@ -424,9 +428,9 @@ def TrapBasic(u0,Laplaceh,F1,F2,par):
 
         for n in range(N):
             wn = w[:,n]
-            rhs = (I + k/2*Lh)@wn + k*F2(n*k,par)
-            w[:,n+1] = spsolve(I - Lh*k/2,rhs)
-           
+            # rhs = (I + k/2*Lh)@wn + k*F2(n*k,par)
+            # w[:,n+1] = spsolve(I - Lh*k/2,rhs)
+            w[:,n+1] = k*F2(n*k,par) + wn
 
         # Pause step #i
         par[3] = k = k_pause
@@ -468,30 +472,31 @@ if __name__ == "__main__":
     u0 = np.zeros(M**2)
     # Running modified PR and IE solver to compare
     print(f"CFL Number for simulation: CFL = {k_pause/(h**2)}")
-    u = TrapBasic(u0,Lh,F1,F2,par,cpuprf = True)    
+    # u = TrapBasic(u0,Lh,F1,F2,par,cpuprf = True)    
     u2 = modPRSolver(u0,Lh,F1,F2,par,cpuprf = True)
     ####   
     ##### Temporary plot to see results ####
 
     # Arbitrarily chosen temperature vector  
-    uN = u[:,N+1]
+    # uN = u[:,N+1]
     u2N = u2[:,N+1]
 
     # # Absoltute and rel error
-    err2Norm = linalg.norm(uN - u2N, 2) * h 
-    print(f"Timestep are kpulse:{k_pulse} and kpause = {k_pause}")
-    print(f"Error at Time step N: {err2Norm}")
-    relerr = err2Norm / np.linalg.norm(uN)
-    print(f"Relative L2 Error: {relerr:.4e}")
+    # err2Norm = linalg.norm(uN - u2N, 2) * h 
+    # print(f"Timestep are kpulse:{k_pulse} and kpause = {k_pause}")
+    # print(f"Error at Time step N: {err2Norm}")
+    # relerr = err2Norm / np.linalg.norm(uN)
+    # print(f"Relative L2 Error: {relerr:.4e}")
 
     xs = np.linspace(0,L,M+2)
     x,y = np.meshgrid(xs,xs)
 
     mat = np.zeros((M+2,M+2), dtype = np.float32)
-    mat[1:M+1,1:M+1] = u[:,-1].reshape(M,M)
-    
+    mat[1:M+1,1:M+1] = u2[:,-1].reshape(M,M)
+    print("h: M: ")
+    print(h,M)    
     if plot_option:
-        u_yt = u.reshape((M,M,-1)) [ M//2 ,: , :] # will have shape [M,N]
+        u_yt = u2.reshape((M,M,-1)) [ M//2 ,: , :] # will have shape [M,N]
         plt.imshow(u_yt, cmap = 'jet',interpolation = 'nearest')
         plt.colorbar(label='Temperature')
         plt.xlabel("Time axis")

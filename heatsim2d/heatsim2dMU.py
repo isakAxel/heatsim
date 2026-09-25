@@ -2,16 +2,16 @@ from heatsim2d import define_parameters,set_nums,DiscLaplacian1D,use_parameters,
 from utils.profiling import timer
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy import sparse,linalg
+from scipy import sparse,linalg,special
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import splu
 
 MeV = 1e6
 # Setting params
 Ep,material,dS_,rho,C_p,p_freq,p,t_pulse,Ib,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters(t_pulse = 0.0015)
-k_pulse,k_pause,maxit,tol,N = set_nums()
+k_pulse,k_pause,maxit,tol,N = set_nums(N = 200)
 
-h,M = set_xspace(L,Mx=200)
+h,M = set_xspace(L,Mx=512)
 
 tend = p / p_freq
 t_pause = (tend - p*t_pulse) / p
@@ -133,25 +133,77 @@ def IkFq(v,fq,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
         u = u - du
         norm_du = h**(1/2)*linalg.norm(du,2)
         if norm_du < tol :
-            if(i>1):
+            if(i>7):
                 print(f"iterations i : {i}")    
             break 
-    
     return u
+
+@use_parameters(1,3,4,5,6,9,10,12,13,20)
+def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
+    """
+    newton's metohd approx of sol to u in 
+        (I -k/2*Fq - k/2*Lz) u = v
+    """
+    if hasattr(v, "toarray"):
+        u = v = v.toarray()  
+    else:
+        u =  v
+
+    size = Lz.shape[0]
+    I = sparse.eye_array(size,size)
+    for i in range(maxit):
+        # F and F_prime
+        Fqu = Fq.__wrapped__(u,fq,h,T0,rho,C_p,sigma,epsilon,gamma)
+        dFqu = dFq.__wrapped__(u,fq,h,T0,rho,C_p,sigma,epsilon,gamma)
+        # Step update
+        idx = Fqu.indices
+        fdata = Fqu.data
+        dFdata = dFqu.data
+
+        Dia_Fz = sparse.coo_array((dFdata,(idx,idx)),shape=(size,size)).tocsr()
+        # Calculate f(uk)
+        fu = (I - k/2*Lz)@u  - v
+        fu[idx] -= k/2*fdata
+        # Jacobian of uk - J(uk)
+        jacobian = I - k/2*Lz - k/2*Dia_Fz
+        du = spsolve(jacobian,fu)
+        # Stepupdate and check
+        u = u - du
+        norm_du = h**(1/2)*linalg.norm(du,2)
+        if norm_du < tol :
+            if(i>7):
+                print(f"iterations i : {i}")    
+            break 
+        return u
+
+# Import numerically stable exponential function from scipy.special
+exp = special.expit
+    
 @use_parameters(0,1,7,9,10,16,17,18,19)
 def F2_t(s,M,h,L,rho,C_p,dEdz,Ib,sigma_x,sigma_y):
     """
-
+    Temporary dP(t) function
+    x,z grid is hardcoded.
+    uses analytical braggcurve approximation
     """
 
     # [h,L-h]
     xs = np.linspace(h,h*M,M)
-    zs = np.linspace(0,L,M+2)
+    # [0,L]
+    zs = np.linspace(0,L,M+2)#
     x,z = np.meshgrid(xs,zs)
     cx = L/2
     r0 = 3.4
     # dEdz_v = np.ones(M) * dEdz
-    dP = Ib/C_p/sigma_x/2/np.pi/sigma_y*np.exp(-((x-cx)**2/2/sigma_x**2)) * P_bragg(z,dEdz,r0)
+    np.savetxt("zvec.log",z,fmt="%10.4f")
+    braggc = P_bragg(z,dEdz,r0)
+    plot = 0
+    if plot:
+        plt.plot(z,braggc,'bx')
+        plt.xlabel("Beam trajectoy length")
+        plt.ylabel("Relative energy deposit")
+        plt.show()
+    dP = Ib/C_p/sigma_x/2/np.pi/sigma_y*exp(-((x-cx)**2/2/sigma_x**2)) * braggc
     u = dP.reshape(-1,)
     return u
 
@@ -169,24 +221,64 @@ def P_bragg(z,dEdz_0,r0,peak = 3.5):
             peak:
                 Peak-to-entrace ratio (defaults as 3.5)
         Returns:
-            dEdz : Stopping power profile in [MeV/cm]
+            dEdz(np.array) :
+                Stopping power profile in [MeVcm^2/g]
 
     """
     # Peak parameters
     sigma_z = 0.018*r0
     w = 0.15*sigma_z
+    # Smoother bragg peak to capture the bragg peak
+    w_physical = 0.15 * sigma_z
+    w = 5*h
+    w = w_physical
 
-    peak_h = 1.0 + (peak - 1.0) * np.exp(-((z - r0)**2) / (2 * sigma_z**2))
-    cutoff = 1.0 / (1.0 + np.exp((z - r0) / w))
+    peak_h = 1.0 + (peak - 1.0) * exp(-((z - r0)**2) / (2 * sigma_z**2))
+    cutoff = 1.0 / (1.0 + exp((z - r0) / w))
     P_tilde = peak_h * cutoff
-
-
     # P = (D_entrance + peak) * cutoff
     return dEdz_0*P_tilde
 
+def P_braggsmooth(z, dEdz_0, r0, peak=4.0,ramp_w= 1.0):
+    
+    
+    sigma_z = 0.018 * r0
+    
+    # 1. Entrance region and rise up to the peak (z <= r0)
+    entrance = 1.0 + (peak - 1.0) * exp(-((z - r0)**2) / (2 * sigma_z**2))
+
+    # 2. Smooth post-peak ramp down to 0 over 'ramp_width' (z > r0)
+    dz = (z - r0) / ramp_w
+    # Quadratic ramp down: continuous at z=r0 (value=peak, derivative=0)
+    ramp_down = peak * np.maximum(0.0, 1.0 - dz**2)
+
+    # Combine pre-peak entrance and post-peak ramp
+    P_tilde = np.where(z <= r0, entrance, ramp_down)
+
+    return dEdz_0 * P_tilde
+
 @timer()
 def PRCoolingCycle(v0,Lh,fq,par):
+    """
+    Solves for the approximation v(N,j,i) where the point approximations are given as: v(n,j,i) approximates 
+    the continous temperature difference v(t,x,y) =  u(t,x,y) - u0. v(n) is given at time t_n and 
+    spatial point (x,y) = (i_hx,j_hy) by the scheme
 
+    u_n+1 = (I-k/2F1).inv @(I+k/2Lh)@(I-k/2Lh).inv@(I+k/2F1) @ u_n
+    
+    The history of approximations is stored in an (Mx*Mz,N+1)-matrix, including inital value v0
+    
+    Parameters: 
+        v0 (array (Mz*Mx,)):
+            Initial value for the cooling cycle, as a flattened array
+        Lh (array (MzMx**2,MzMx**2)):
+            Full discretized laplacian operator
+        fq (array (Mz*Mx,)):
+            Boundary condition array with non-zero values for gridpoints with non-zero neumann BC
+        par(list):
+            Parameter vector with simulation parameters
+    """
+    # This splitting is probably convergent of order 2 
     M_l = Lh.shape[0]
     N = par[2]
 
@@ -194,9 +286,9 @@ def PRCoolingCycle(v0,Lh,fq,par):
     w[:,0] = v0
     I = sparse.eye_array(M_l,M_l)
 
-    print("------ Cooling Cycle --------")
+    print("------ Cooling Cycle Boundary Term Split --------")
     par[3] = k = k_pause
-    lu = splu(I - k/2*Lh, permc_spec = 'NATURAL')
+    lu = splu((I - k/2*Lh).tocsc(), permc_spec = 'NATURAL')
     for n in range(N):
         wn = w[:,n].copy()
         ## Sparse add
@@ -207,6 +299,60 @@ def PRCoolingCycle(v0,Lh,fq,par):
         w[:,n+1] = IkFq(v,fq,par)
 
     return w
+@timer()
+def PRCoolingCycle2(v0,Lx,Lz,fq,par):
+    """
+    
+    In version v2 the operators change from (Lh / Fq) to  (Lx / (Lz + Fq_z)) respectively, so the splitting is made across the dimension.
+
+
+    Solves for the approximation v(N,j,i) where the point approximations are given as: v(n,j,i) approximates 
+    the continous temperature difference v(t,x,y) =  u(t,x,y) - u0. v(n) is given at time t_n and 
+    spatial point (x,y) = (i_hx,j_hy) by the scheme
+
+    u_n+1 = (I-k/2F1).inv @(I+k/2Lh)@(I-k/2Lh).inv@(I+k/2F1) @ u_n
+    
+    The history of approximations is stored in an (Mx*Mz,N+1)-matrix, including inital value v0
+    
+    Parameters: 
+        v0 (array (Mz*Mx,)):
+            Initial value for the cooling cycle, as a flattened array
+        Lx (array (MzMx**2,MzMx**2)):
+            Discretized laplacian operator for x coordinates
+        Lz (array (MzMx**2,MzMx**2)):
+            Discretized laplacian operator for z coordinates
+        fq (array (Mz*Mx,)):
+            Boundary condition array with non-zero values for gridpoints with non-zero neumann BC
+        par(list):
+            Parameter vector with simulation parameters
+    """
+    # This splitting is probably convergent of order 2 
+    M_l = Lz.shape[0]
+    N = par[2]
+
+    w = np.zeros((M_l,N+1))
+    w[:,0] = v0
+    I = sparse.eye_array(M_l,M_l)
+
+    print("------ Cooling Cycle Dimensional Split--------")
+    par[3] = k = k_pause
+    lux = splu((I - k/2*Lx).tocsc(), permc_spec = 'NATURAL')
+    
+    for n in range(N):
+        wn = w[:,n].copy()
+        ## Sparse add
+        
+        # Operating (I +k/2Fq(wn) + LZ wn)
+        fqu = Fq(wn, fq, par)        # fqu is sparse csr vector 
+        idx = fqu.indices
+        wn[idx] += k/2* fqu.data
+        wn = wn + k/2*Lz@wn 
+        # Operating (I+k/2*Lx) @ (I - k/2 *Lx)^-1
+        v = (I +k/2*Lx) @ lux.solve(wn)
+        w[:,n+1] = IkFqLz(v,fq,Lz,par)
+
+    return w
+
 
 
 if __name__ == "__main__":
@@ -227,55 +373,107 @@ if __name__ == "__main__":
         f"Sigmay : {sigma_y} \n",
         f"T0 : {T0}\n",)
 
+    Ix = sparse.eye_array(M,M)
+    Iz = sparse.eye_array((M+2),(M+2))
+    
     Lhx = DiscLaplacian1D(0,par)
     Lhz = DiscLaplacian1D(0,par)
-    # print(Lh.toarray())
     Lhz, fq = BoundaryConditionNeumann(Lhz,h,q0=1,qend=0)
-    
-    
+    Lx = sparse.kron(Iz,Lhx, format='csr')
+    Lz = sparse.kron(Lhz,Ix, format='csr')  
+
+    # filename = "mat.log"
+    # np.savetxt(filename, Lhz.toarray(), fmt="%10.4f")
+
     one_x = np.ones((M,1))
     one_z = np.ones((M+2,1))
     # Create t
     fq = sparse.kron(fq,one_x, format='csr')
-    Ix = sparse.eye_array(M,M)
-    Iz = sparse.eye_array((M+2),(M+2))
+    
     # L_2D = sparse.kron(Lhz,Ix, format='csr') + sparse.kron(Iz,Lhx, format='csr')
     L_2D = sparse.kronsum(Lhx,Lhz, format = 'csr')
-    # print(Fq_2D.shape)
-    # print(type(Fq_2D))
-    # print(L_2D.shape)
+    
     
     # v0 shape ((M+2)M,1)
     v0 = F2_t(0,par) * t_pulse
     plot = plot_option
     if plot:
-        plt.imshow(v0.reshape((M+2,M)), cmap = 'jet',interpolation = 'nearest')
-        plt.colorbar(label='Temperature')
-        plt.xlabel("x-axis")
-        plt.ylabel("z-axis")
+        fig,ax = plt.subplots()
+
+        x = np.linspace(h,L-h,M)
+        z = np.linspace(0,L,M+2)
+
+        mesh = ax.pcolormesh(x,z,v0.reshape((M+2,M)), cmap = 'jet',shading = 'auto')
+        plt.colorbar(mesh,label='Temperature')
+        plt.xlabel("x-axis[cm]")
+        plt.ylabel("z-axis[cm]")
+        tick_posx = tick_posz = np.arange(0,int(L)+1)
+        ax.set_xticks(tick_posx)
+        ax.set_yticks(tick_posz)
+
+
         plt.title("Heat after 1st heating cycle")
         plt.show()    
 
 
     # plt.spy(L_2D)
     # plt.show()
+        
+    u = PRCoolingCycle2(v0,Lx,Lz,fq,par)
+    u2 = PRCoolingCycle(v0,L_2D,fq,par)
 
-    tb = 0
-    if tb:
-        z = np.linspace(0,L,20000)
-        r0 = 3.4
-        print(f"dEdz = {dEdz}")
-        braggc = P_bragg(z,dEdz,r0)
-        plt.plot(z,braggc,'bx')
-        plt.show()
+    err2Norm = linalg.norm(u2 - u, 2) * h
+    print(f" error L2-norm : {err2Norm}")
+    
+    diff_time = t_pause  # total physical cooling time
+    diff_coeff = D / (rho * C_p)
+    diff_length = np.sqrt(diff_coeff * diff_time)
+    print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
+    print(f"That's {diff_length/h:.1f} grid cells")
 
-    u = PRCoolingCycle(v0,L_2D,fq,par)
+    k1 = max(k_pause,k_pulse)
+
+    print(f"dt = {k1}")
+    print(f"dx = {h}")
+    print(f"CFL Number for simulation: CFL = {k_pause/(h**2)}")
 
     if plot_option:
-        plt.pcolormesh(u[:,-1].reshape((M+2,M)), cmap='jet', shading='auto')
-        # plt.imshow(u[:,-1].reshape((M+2,M)), cmap = 'jet',interpolation = 'none', origin ='upper',aspect= 'auto')
-        plt.colorbar(label='Temperature')
-        plt.xlabel("x-axis")
-        plt.ylabel("z-axis")
-        plt.title("Temperature distr after 1st cooling cycle")
+        fig,ax = plt.subplots(figsize = (12,10))
+        x = np.linspace(h,L-h,M)
+        z = np.linspace(0,L,M+2)
+        u_f  = u[:,-1]
+        mesh = ax.pcolormesh(x,z,u_f.reshape((M+2,M)), cmap='jet', shading='auto')
+        plt.colorbar(mesh ,label='Temperature')
+        plt.xlabel("x-axis[cm]")
+        plt.ylabel("z-axis[cm]")
+        tick_posx = tick_posz = np.arange(int(L) + 1)
+        ax.set_xticks(tick_posx)
+        ax.set_yticks(tick_posz)
+
+        
+        # Plotting max temperature
+        print(u_f.shape)
+
+        idx = np.argmax(u_f)
+        T_max = u_f[idx]
+
+        iz_max,ix_max = np.unravel_index(idx, (M + 2, M))
+        ax.plot(x[ix_max], z[iz_max], marker='D', markersize=6,
+                markerfacecolor='white', markeredgecolor='black',
+                label=f'Max Temperature = {T_max:.1f}')
+        ax.legend(loc='upper right')
+
+        plt.text(
+            0.03, 0.95, 
+            f"Time for cooling tpause = {t_pause}", 
+            transform=plt.gca().transAxes,  
+            fontsize=9,                   
+            verticalalignment='top',
+            horizontalalignment='left',
+            bbox=dict(
+                facecolor='white',          # White background
+                alpha=0.7,                  
+            )
+        )
+        plt.title(f"Heat development after 1st cooling cycle,\n with M = {M} N = {N}")
         plt.show()
