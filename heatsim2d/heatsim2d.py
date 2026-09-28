@@ -36,7 +36,7 @@ def define_parameters (Ep = 90,
     Returns 
         ------
         Ep : float
-            Proton energy
+            Proton energy [MeV]
         material : string
             Target material
         p_freq : float
@@ -463,8 +463,9 @@ if __name__ == "__main__":
         f"Sigmay : {sigma_y} \n",
         f"T0 : {T0}\n",)
 
+    dP = rho *Ib * dEdx
+    print("dP : ",dP)
 
-    
     # Creating Linear operators I and discrete Laplaceian Lh
     Lh = DiscLaplacian(1,par)
     

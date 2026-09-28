@@ -11,7 +11,7 @@ MeV = 1e6
 Ep,material,dS_,rho,C_p,p_freq,p,t_pulse,Ib,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters(t_pulse = 0.0015)
 k_pulse,k_pause,maxit,tol,N = set_nums(N = 200)
 
-h,M = set_xspace(L,Mx=512)
+h,M = set_xspace(L,Mx=200)
 
 tend = p / p_freq
 t_pause = (tend - p*t_pulse) / p
@@ -176,7 +176,7 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
             break 
         return u
 
-# Import numerically stable exponential function from scipy.special
+# Import numerically stable sigmoid function
 exp = special.expit
     
 @use_parameters(0,1,7,9,10,16,17,18,19)
@@ -188,8 +188,10 @@ def F2_t(s,M,h,L,rho,C_p,dEdz,Ib,sigma_x,sigma_y):
     """
 
     # [h,L-h]
+    # Interior
     xs = np.linspace(h,h*M,M)
     # [0,L]
+    # with boundary
     zs = np.linspace(0,L,M+2)#
     x,z = np.meshgrid(xs,zs)
     cx = L/2
@@ -197,13 +199,15 @@ def F2_t(s,M,h,L,rho,C_p,dEdz,Ib,sigma_x,sigma_y):
     # dEdz_v = np.ones(M) * dEdz
     np.savetxt("zvec.log",z,fmt="%10.4f")
     braggc = P_bragg(z,dEdz,r0)
-    plot = 0
+    plot = 1
     if plot:
         plt.plot(z,braggc,'bx')
         plt.xlabel("Beam trajectoy length")
         plt.ylabel("Relative energy deposit")
         plt.show()
-    dP = Ib/C_p/sigma_x/2/np.pi/sigma_y*exp(-((x-cx)**2/2/sigma_x**2)) * braggc
+    # dP = Ib * dEdz * rho 
+
+    dP = Ib/C_p/sigma_x/2/np.pi/sigma_y*np.exp(-((x-cx)**2/2/(sigma_x**2))) * braggc
     u = dP.reshape(-1,)
     return u
 
@@ -234,7 +238,9 @@ def P_bragg(z,dEdz_0,r0,peak = 3.5):
     w = w_physical
 
     peak_h = 1.0 + (peak - 1.0) * exp(-((z - r0)**2) / (2 * sigma_z**2))
-    cutoff = 1.0 / (1.0 + exp((z - r0) / w))
+    # cutoff = 1.0 / (1.0 + exp((z - r0) / w))
+    # 
+    cutoff = exp(-(z-r0)/w)
     P_tilde = peak_h * cutoff
     # P = (D_entrance + peak) * cutoff
     return dEdz_0*P_tilde
@@ -396,6 +402,9 @@ if __name__ == "__main__":
     
     # v0 shape ((M+2)M,1)
     v0 = F2_t(0,par) * t_pulse
+    print("Temperature max")
+    print(np.max(F2_t(0,par)* t_pulse))
+    print(t_pulse, "tpulse in main")
     plot = plot_option
     if plot:
         fig,ax = plt.subplots()
