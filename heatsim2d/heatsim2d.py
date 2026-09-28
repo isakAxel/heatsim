@@ -138,7 +138,7 @@ def use_parameters(*indices):
 
             if indices and max(indices) >= len(par):
                 raise IndexError(
-                    f"Index {max(indices)} is out of bounds for parameter vector of length {len(p_vec)}"
+                    f"Index {max(indices)} is out of bounds for parameter vector of length {len(par)}"
                 )
             sub_par = [par[i] for i in indices]
             return func(*data_vars, *sub_par, **kwargs)
