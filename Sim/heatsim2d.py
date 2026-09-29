@@ -69,7 +69,7 @@ def define_parameters (Ep = 90,
             Tuple of all collected parameters specific to Beam setup and Material
     
     """
-    dS_,rho_,Cp_     = import_PSTAR_data(material,Ep,0)
+    # dS_,rho_,Cp_     = import_PSTAR_data(material,Ep,0)
     ### Overwrite from report #FIXME
     ### very hardcoded
     dS_,rho_,Cp_ = 1.67,8.9,0.44
@@ -312,10 +312,11 @@ def compute_coeffs(n_dU,T_end,T0,L,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,s
 
     ### Could write these c_bolt and c_newton depending on \epsilon and \gamma ? 
     ### 
+    print("tpulse = ", t_pulse)
     coeffs = {"dU" : dU.tolist(),
-              "c_pulse" : (L**4 * dEdx * Ib / ( D**2*dU*C_p*2*np.pi*sigma_x*sigma_y)).tolist(),
-              "c_Bolt" : (sigma * dU**3 * L ** 2 / (rho * C_p * t / D)).tolist(),
-              "c_newton" :[ L**2 / (rho*C_p*t*D)] * len(dU),             # Does not depened on dU explicitly
+              "c_pulse" : (dEdx * Ib * L**2 / ( D**2*dU*C_p)).tolist(),
+              "c_Bolt" : (epsilon * sigma * dU**3 * L ** 2 / (rho * C_p * t / D)).tolist(),
+              "c_newton" :[ gamma*L**2 / (rho*C_p*t*D)] * len(dU),             # Does not depened on dU explicitly
               "Theta0" : (T0 / dU).tolist()
               }
     coeffs["c_laplace"] = [1]*len(dU) 

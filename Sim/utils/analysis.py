@@ -1,15 +1,15 @@
 import os
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import heatsim2d as hs2
+import Sim.heatsim2d as s
 import pandas as pd
 
 
 
 def c_analysis(n_dU,T_end):
 
-    coeffs = hs2.compute_coeffs(n_dU,T_end,hs2.par)
+    coeffs = s.compute_coeffs(n_dU,T_end,s.par)
     df = pd.DataFrame(data=coeffs)
 
     
@@ -19,6 +19,6 @@ def c_analysis(n_dU,T_end):
         
 
 
-n = 6
-T_end = 200
+n = 11
+T_end = 1000
 c_analysis(n,T_end)

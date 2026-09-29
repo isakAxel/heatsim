@@ -1,4 +1,4 @@
-import numpy as np
+# import numpy as np
 from star import ProtonSTARCalculator,ProtonMaterials
 from mendeleev import element
 
@@ -81,11 +81,11 @@ SOLIDS_TABLE = {
     "SS316L" : {"rho": 8, "cp": 0.5, "k" : 16.3 },
 }
 
-
-k,rho,cp,eps = import_mat_data("SS316L")
-print(k,rho,cp)
-print("epsy",eps)
-# Ep = np.linspace(500,1000,11)
-Ep = 800
-dS = import_PSTAR_data("Al",Ep,0)
-print(f"dS : {dS}")
+if __name__ == '__main__':
+    k,rho,cp,eps = import_mat_data("SS316L")
+    print(k,rho,cp)
+    print("epsy",eps)
+    # Ep = np.linspace(500,1000,11)
+    Ep = 800
+    dS = import_PSTAR_data("Al",Ep)
+    print(f"dS : {dS}")

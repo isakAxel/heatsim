@@ -17,3 +17,8 @@ sandbox*
 # log files
 .log
 *log
+
+# setup files 
+*.egg-info/
+build/
+dist/
