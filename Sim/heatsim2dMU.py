@@ -9,9 +9,9 @@ from scipy.sparse.linalg import splu
 MeV = 1e6
 # Setting params
 Ep,material,dS_,rho,C_p,p_freq,p,t_pulse,Ib,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters(t_pulse = 0.0015)
-k_pulse,k_pause,maxit,tol,N = set_nums(N = 200)
+k_pulse,k_pause,maxit,tol,N = set_nums(N = 100)
 
-h,M = set_xspace(L,Mx=200)
+h,M = set_xspace(L,Mx=100)
 
 tend = p / p_freq
 t_pause = (tend - p*t_pulse) / p
