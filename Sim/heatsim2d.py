@@ -14,7 +14,7 @@ mA = 1e-3
 def define_parameters (Ep = 90, 
                         material = 'Cu',
                         p_freq = 1,
-                        p = 10,                  # change to 2 to see behaviour
+                        p = 1,                  # change to 2 to see behaviour
                         t_pulse = 0.002,
                         I_beam = 65 * mA,
                         sigma_x = 2,
@@ -124,7 +124,7 @@ def set_xspace(Lx,Mx = 100):
 
 ### Get Numerical Parameters
 k_pulse,k_pause,maxit,tol,N = set_nums()
-h,M = set_xspace(L,Mx = 512)
+h,M = set_xspace(L)
 
 par=[M,h,N,0,maxit,tol,T0,L,tend,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y,gamma];
 
