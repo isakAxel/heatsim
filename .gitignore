@@ -22,3 +22,6 @@ sandbox*
 *.egg-info/
 build/
 dist/
+
+# .prof files for profiling call stack
+*prof

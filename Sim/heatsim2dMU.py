@@ -138,6 +138,8 @@ def IkFq(v,fq,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
             break 
     return u
 
+
+show_jacobian = 0
 @use_parameters(1,3,4,5,6,9,10,12,13,20)
 def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
     """
@@ -166,7 +168,28 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
         fu[idx] -= k/2*fdata
         # Jacobian of uk - J(uk)
         jacobian = I - k/2*Lz - k/2*Dia_Fz
-        du = spsolve(jacobian,fu)
+
+        if show_jacobian and i == 0:
+            plt.figure(figsize=(8, 7))
+            J_coo = jacobian.tocoo()
+            sc = plt.scatter(
+                J_coo.col, 
+                J_coo.row, 
+                c=np.abs(J_coo.data), 
+                cmap='plasma', 
+                s=4  # dot size
+            )
+
+            plt.gca().invert_yaxis()  # Match matrix orientation (row 0 at top)
+            plt.colorbar(sc, label='|Value|')
+            plt.title(f"Non-zero Jacobian Magnitudes ({J_coo.nnz} entries)")
+            plt.xlabel("Column Index")
+            plt.ylabel("Row Index")
+            plt.tight_layout()
+            plt.show()
+        # print("Jacobian: " , jacobian.toarray())
+
+        du = spsolve(jacobian,fu)               # 20 / 27 of all time
         # Stepupdate and check
         u = u - du
         norm_du = h**(1/2)*linalg.norm(du,2)
@@ -174,7 +197,7 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
             if(i>7):
                 print(f"iterations i : {i}")    
             break 
-        return u
+    return u
 
 # Import numerically stable sigmoid function
 exp = special.expit
@@ -199,7 +222,7 @@ def F2_t(s,M,h,L,rho,C_p,dEdz,Ib,sigma_x,sigma_y):
     # dEdz_v = np.ones(M) * dEdz
     np.savetxt("zvec.log",z,fmt="%10.4f")
     braggc = P_bragg(z,dEdz,r0)
-    plot = 1
+    plot = 0
     if plot:
         plt.plot(z,braggc,'bx')
         plt.xlabel("Beam trajectoy length")
@@ -301,7 +324,7 @@ def PRCoolingCycle(v0,Lh,fq,par):
         fqu = Fq(wn, fq, par)          # fqu is sparse csr vector 
         idx = fqu.indices
         wn[idx] += k/2* fqu.data
-        v = (I +k/2*Lh) @ lu.solve(wn)
+        v = (I +k/2*Lh) @ lu.solve(wn)          # 5/8 of all time
         w[:,n+1] = IkFq(v,fq,par)
 
     return w
@@ -387,7 +410,17 @@ if __name__ == "__main__":
     Lhz, fq = BoundaryConditionNeumann(Lhz,h,q0=1,qend=0)
     Lx = sparse.kron(Iz,Lhx, format='csr')
     Lz = sparse.kron(Lhz,Ix, format='csr')  
+       
+    # sub_N = Lz.shape[0] // 100
+    # plt.spy(Lz[:sub_N, :sub_N], markersize = 0.5)
+    # plt.title("Sparsity pattern of Lz Matrix")
+    # plt.show()
 
+
+    # plt.spy(Lx[:sub_N//10, :sub_N//10], markersize = 0.7)
+    # plt.title("Sparsity pattern of Lx Matrix")
+    # plt.show()
+    # # exit()
     # filename = "mat.log"
     # np.savetxt(filename, Lhz.toarray(), fmt="%10.4f")
 
