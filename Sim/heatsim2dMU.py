@@ -9,9 +9,9 @@ from scipy.sparse.linalg import splu
 MeV = 1e6
 # Setting params
 Ep,material,dS_,rho,C_p,p_freq,p,t_pulse,Ib,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters(t_pulse = 0.0015)
-k_pulse,k_pause,maxit,tol,N = set_nums(N = 100)
+k_pulse,k_pause,maxit,tol,N = set_nums(N = 50)
 
-h,M = set_xspace(L,Mx=100)
+h,M = set_xspace(L,Mx= 50)
 
 tend = p / p_freq
 t_pause = (tend - p*t_pulse) / p
@@ -83,7 +83,7 @@ def Fq(v,fq,h,T0,rho,C_p,sigma,epsilon,gamma):
     c_bolt = sigma*epsilon/rho/C_p 
     c_newton = gamma/rho/C_p
     cdata = - (c_bolt*(((v_vals+T0)/100.0)**4-(T0/100.0)**4)) - c_newton*v_vals
-    u.data = cdata * h/2
+    u.data = cdata * 2/h
     return u
 
 @use_parameters(1,6,9,10,12,13,20)
@@ -102,7 +102,7 @@ def dFq(v,fq,h,T0,rho,C_p,sigma,epsilon,gamma):
     c_newton = gamma/rho/C_p
     #TODO Mabe negative ? 
     cdata = - 4*c_bolt*((v_vals+T0)/100)**3 *1/100 - c_newton 
-    u.data = cdata *h/2
+    u.data = cdata *2/h
     return u
 
 @use_parameters(1,3,4,5,6,9,10,12,13,20)
@@ -169,32 +169,13 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
         # Jacobian of uk - J(uk)
         jacobian = I - k/2*Lz - k/2*Dia_Fz
 
-        if show_jacobian and i == 0:
-            plt.figure(figsize=(8, 7))
-            J_coo = jacobian.tocoo()
-            sc = plt.scatter(
-                J_coo.col, 
-                J_coo.row, 
-                c=np.abs(J_coo.data), 
-                cmap='plasma', 
-                s=4  # dot size
-            )
-
-            plt.gca().invert_yaxis()  # Match matrix orientation (row 0 at top)
-            plt.colorbar(sc, label='|Value|')
-            plt.title(f"Non-zero Jacobian Magnitudes ({J_coo.nnz} entries)")
-            plt.xlabel("Column Index")
-            plt.ylabel("Row Index")
-            plt.tight_layout()
-            plt.show()
-        # print("Jacobian: " , jacobian.toarray())
 
         du = spsolve(jacobian,fu)               # 20 / 27 of all time
         # Stepupdate and check
         u = u - du
         norm_du = h**(1/2)*linalg.norm(du,2)
         if norm_du < tol :
-            if(i>7):
+            if(i>3):
                 print(f"iterations i : {i}")    
             break 
     return u
@@ -260,7 +241,7 @@ def P_bragg(z,dEdz_0,r0,peak = 3.5):
     w = 5*h
     w = w_physical
 
-    peak_h = 1.0 + (peak - 1.0) * exp(-((z - r0)**2) / (2 * sigma_z**2))
+    peak_h = 1.0 + (peak - 1.0) * np.exp(-((z - r0)**2) / (2 * sigma_z**2))
     # cutoff = 1.0 / (1.0 + exp((z - r0) / w))
     # 
     cutoff = exp(-(z-r0)/w)
@@ -381,7 +362,119 @@ def PRCoolingCycle2(v0,Lx,Lz,fq,par):
         w[:,n+1] = IkFqLz(v,fq,Lz,par)
 
     return w
+@timer()
+def IsakCoolingCyclev2(v0,Lx,Lz,fq,par):
+    """
+    
+    In version v2 the operators change from (Lh / Fq) to  (Lx / (Lz + Fq_z)) respectively, so the splitting is made across the dimension.
 
+
+    Solves for the approximation v(N,j,i) where the point approximations are given as: v(n,j,i) approximates 
+    the continous temperature difference v(t,x,y) =  u(t,x,y) - u0. v(n) is given at time t_n and 
+    spatial point (x,y) = (i_hx,j_hy) by the scheme
+    
+    (Using Explicit Trapezoidal Rule)
+    
+    The history of approximations is stored in an (Mx*Mz,N+1)-matrix, including inital value v0
+    
+    Parameters: 
+        v0 (array (Mz*Mx,)):
+            Initial value for the cooling cycle, as a flattened array
+        Lx (array (MzMx**2,MzMx**2)):
+            Discretized laplacian operator for x coordinates
+        Lz (array (MzMx**2,MzMx**2)):
+            Discretized laplacian operator for z coordinates
+        fq (array (Mz*Mx,)):
+            Boundary condition array with non-zero values for gridpoints with non-zero neumann BC
+        par(list):
+            Parameter vector with simulation parameters
+    """
+        # This splitting is probably convergent of order 2 
+    
+    M_l = Lz.shape[0]
+    N = par[2]
+
+    w = np.zeros((M_l,N+1))
+    w[:,0] = v0
+    I = sparse.eye_array(M_l,M_l)
+
+    print("------ Cooling Cycle Dimensional Explicit Trapezoidal--------")
+    par[3] = k = k_pause
+
+    for n in range(N):
+        wn = w[:,n].copy()
+        ## Sparse add
+
+        # (I + k/2*Lx + k**2/8 Lx**2)
+        v = (I + k/2*Lx@(I+k/4*Lx)) @ wn
+        # "Inverse" operator 
+        # explicit trapezoidal step
+        fqu1 = Fq(v,fq,par)
+        idx = fqu1.indices
+        k1 = Lz@v 
+        k1[idx] += fqu1.data
+        alpha0 = v + k * k1
+    
+        fqu2 = Fq(alpha0,fq,par)
+        k2 = Lz @ alpha0
+        k2[fqu2.indices] += fqu2.data
+
+        v = v + k/2 * ( k1+k2 )
+        # Combine step
+        w[:,n+1] = (I + k/2*Lx@(I+k/4*Lx)) @ v
+    
+    return w
+
+@timer()
+def TrapCoolingCycle(v0,L,fq,par):
+    """
+    TrapCoolingCycle is a Trapezoidal solver with NO splitting. The method is order 2 convergent in (k) and the results will be used to investigate the 
+    splitting errors
+
+    Solves for the approximation v(N,j,i) where the point approximations are given as: v(n,j,i) approximates 
+    the continous temperature difference v(t,x,y) =  u(t,x,y) - u0. v(n) is given at time t_n and 
+    spatial point (x,y) = (i_hx,j_hy) by the scheme
+
+    u_n+1 = (I-k/2*Fq_z-k/2*L_xz).inv @ (I+k/2Lh + k/2*Fq_z) @ u_n
+    
+    The history of approximations is stored in an (Mx*Mz,N+1)-matrix, including inital value v0
+    
+    Parameters: 
+        v0 (array (Mz*Mx,)):
+            Initial value for the cooling cycle, as a flattened array
+        L (array (MzMx**2,MzMx**2)):
+            Discretized laplacian operator for x-z coordinates
+        fq (array (Mz*Mx,)):
+            Boundary condition array with non-zero values for gridpoints with non-zero neumann BC
+        par(list):
+            Parameter vector with simulation parameters
+    
+    """
+    # This splitting is probably convergent of order 2 
+    
+    M_l = L.shape[0]
+    N = par[2]
+
+    w = np.zeros((M_l,N+1))
+    w[:,0] = v0
+    I = sparse.eye_array(M_l,M_l)
+
+    print("------ Cooling Cycle Implicit Trapezoidal Rule Solver  --------")
+    par[3] = k = k_pause
+    # lu = splu((I - k/2*Lh).tocsc(), permc_spec = 'NATURAL')
+    for n in range(N):
+        wn = w[:,n].copy()
+        # Operate L_xz
+        v_rhs = (I +k/2*L) @ wn 
+        # Add Fq_z contri
+        fqu = Fq(wn, fq, par)          # fqu is sparse csr vector 
+        idx = fqu.indices
+        v_rhs[idx] += k/2* fqu.data
+
+        # Newton Raphson method to find F(w_n+1) = wn      
+        w[:,n+1] = IkFqLz(wn,fq,L,par)
+
+    return w
 
 
 if __name__ == "__main__":
@@ -432,7 +525,12 @@ if __name__ == "__main__":
     # L_2D = sparse.kron(Lhz,Ix, format='csr') + sparse.kron(Iz,Lhx, format='csr')
     L_2D = sparse.kronsum(Lhx,Lhz, format = 'csr')
     
+    k1 = max(k_pause,k_pulse)
     
+    print(f"dt = {k1}")
+    print(f"dx = {h}")
+    print(f"CFL Number for simulation: CFL = {D * k_pause/h**2}")
+
     # v0 shape ((M+2)M,1)
     v0 = F2_t(0,par) * t_pulse
     print("Temperature max")
@@ -462,60 +560,86 @@ if __name__ == "__main__":
     # plt.show()
         
     u = PRCoolingCycle2(v0,Lx,Lz,fq,par)
-    u2 = PRCoolingCycle(v0,L_2D,fq,par)
+    # u2 = PRCoolingCycle(v0,L_2D,fq,par)
+    # u3 = IsakCoolingCyclev2(v0,Lx,Lz,fq,par)
+    u3 = TrapCoolingCycle(v0,L_2D,fq,par)
 
-    err2Norm = linalg.norm(u2 - u, 2) * h
-    print(f" error L2-norm : {err2Norm}")
-    
+    # err2Norm = linalg.norm(u2 - u, 2) * h
+    # print(f" error L2-norm : {err2Norm}")
+
+    err2Norm2 = linalg.norm(u3 - u, 2) * h
+    print(f" error L2-norm : {err2Norm2}")
+
     diff_time = t_pause  # total physical cooling time
     diff_coeff = D / (rho * C_p)
     diff_length = np.sqrt(diff_coeff * diff_time)
     print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
     print(f"That's {diff_length/h:.1f} grid cells")
 
-    k1 = max(k_pause,k_pulse)
-
-    print(f"dt = {k1}")
-    print(f"dx = {h}")
-    print(f"CFL Number for simulation: CFL = {k_pause/(h**2)}")
+    
 
     if plot_option:
-        fig,ax = plt.subplots(figsize = (12,10))
-        x = np.linspace(h,L-h,M)
-        z = np.linspace(0,L,M+2)
-        u_f  = u[:,-1]
-        mesh = ax.pcolormesh(x,z,u_f.reshape((M+2,M)), cmap='jet', shading='auto')
-        plt.colorbar(mesh ,label='Temperature')
-        plt.xlabel("x-axis[cm]")
-        plt.ylabel("z-axis[cm]")
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8), sharey=True)
+
+        x = np.linspace(h, L - h, M)
+        z = np.linspace(0, L, M + 2)
+
+        u_f = u[:, -1]
+       
+        u2_f = u3[:, -1]  # Ensure u2 is defined in your scope
+        # u_f = np.zeros_like(u2_f)
+
+        # Unified color scale limits across both plots for accurate visual comparison
+        vmin = min(u_f.min(), u2_f.min())
+        vmax = max(u_f.max(), u2_f.max())
+
         tick_posx = tick_posz = np.arange(int(L) + 1)
-        ax.set_xticks(tick_posx)
-        ax.set_yticks(tick_posz)
 
-        
-        # Plotting max temperature
-        print(u_f.shape)
+        # --- Plot 1: u_f ---
+        mesh1 = ax1.pcolormesh(x, z, u_f.reshape((M + 2, M)), cmap='jet', shading='auto', vmin=vmin, vmax=vmax)
+        ax1.set_xlabel("x-axis [cm]")
+        ax1.set_ylabel("z-axis [cm]")
+        ax1.set_xticks(tick_posx)
+        ax1.set_yticks(tick_posz)
+        ax1.set_title("First Solution ($u$)")
 
-        idx = np.argmax(u_f)
-        T_max = u_f[idx]
-
-        iz_max,ix_max = np.unravel_index(idx, (M + 2, M))
-        ax.plot(x[ix_max], z[iz_max], marker='D', markersize=6,
+        # Max Temp for Plot 1
+        idx1 = np.argmax(u_f)
+        T_max1 = u_f[idx1]
+        iz_max1, ix_max1 = np.unravel_index(idx1, (M + 2, M))
+        ax1.plot(x[ix_max1], z[iz_max1], marker='D', markersize=6,
                 markerfacecolor='white', markeredgecolor='black',
-                label=f'Max Temperature = {T_max:.1f}')
-        ax.legend(loc='upper right')
+                label=f'Max Temp = {T_max1:.1f}')
+        ax1.legend(loc='upper right')
 
-        plt.text(
+        # --- Plot 2: u2_f ---
+        mesh2 = ax2.pcolormesh(x, z, u2_f.reshape((M + 2, M)), cmap='jet', shading='auto', vmin=vmin, vmax=vmax)
+        ax2.set_xlabel("x-axis [cm]")
+        ax2.set_xticks(tick_posx)
+        ax2.set_title("Second Solution ($u_2$)")
+
+        # Max Temp for Plot 2
+        idx2 = np.argmax(u2_f)
+        T_max2 = u2_f[idx2]
+        iz_max2, ix_max2 = np.unravel_index(idx2, (M + 2, M))
+        ax2.plot(x[ix_max2], z[iz_max2], marker='D', markersize=6,
+                markerfacecolor='white', markeredgecolor='black',
+                label=f'Max Temp = {T_max2:.1f}')
+        ax2.legend(loc='upper right')
+
+        # --- Shared Colorbar & Layout Formatting ---
+        fig.colorbar(mesh2, ax=[ax1, ax2], label='Temperature', fraction=0.046, pad=0.04)
+
+        # Info box on the first subplot
+        ax1.text(
             0.03, 0.95, 
             f"Time for cooling tpause = {t_pause}", 
-            transform=plt.gca().transAxes,  
+            transform=ax1.transAxes,  
             fontsize=9,                   
             verticalalignment='top',
             horizontalalignment='left',
-            bbox=dict(
-                facecolor='white',          # White background
-                alpha=0.7,                  
-            )
+            bbox=dict(facecolor='white', alpha=0.7)
         )
-        plt.title(f"Heat development after 1st cooling cycle,\n with M = {M} N = {N}")
+
+        fig.suptitle(f"Heat Development Comparison after 1st Cooling Cycle\n(M = {M}, N = {N})", fontsize=14)
         plt.show()
