@@ -4,14 +4,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import sparse,linalg,special
 from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import splu
+from scipy.sparse.linalg import splu,cg
 
 MeV = 1e6
 # Setting params
 Ep,material,dS_,rho,C_p,p_freq,p,t_pulse,Ib,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters(t_pulse = 0.0015)
-k_pulse,k_pause,maxit,tol,N = set_nums(N = 50)
+k_pulse,k_pause,maxit,tol,N = set_nums(N = 150)
 
-h,M = set_xspace(L,Mx= 50)
+h,M = set_xspace(L,Mx= 150)
 
 tend = p / p_freq
 t_pause = (tend - p*t_pulse) / p
@@ -138,7 +138,7 @@ def IkFq(v,fq,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
             break 
     return u
 
-
+cg_tag= 1
 show_jacobian = 0
 @use_parameters(1,3,4,5,6,9,10,12,13,20)
 def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
@@ -169,8 +169,12 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
         # Jacobian of uk - J(uk)
         jacobian = I - k/2*Lz - k/2*Dia_Fz
 
-
-        du = spsolve(jacobian,fu)               # 20 / 27 of all time
+        if cg_tag:
+            du,info = cg(jacobian,fu,v)
+            if info > 0 :
+                print("Convergence to tolerance not achieved")
+        else:
+            du = spsolve(jacobian,fu)               # 20 / 27 of all time
         # Stepupdate and check
         u = u - du
         norm_du = h**(1/2)*linalg.norm(du,2)
@@ -564,6 +568,10 @@ if __name__ == "__main__":
     # u3 = IsakCoolingCyclev2(v0,Lx,Lz,fq,par)
     u3 = TrapCoolingCycle(v0,L_2D,fq,par)
 
+    cg_tag = 0
+    print("----- Using spsolve in newton iterations ----- \n")
+    u2 = PRCoolingCycle2(v0,Lx,Lz,fq,par)
+    u5 = TrapCoolingCycle(v0,L_2D,fq,par)
     # err2Norm = linalg.norm(u2 - u, 2) * h
     # print(f" error L2-norm : {err2Norm}")
 
