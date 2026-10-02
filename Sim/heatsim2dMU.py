@@ -3,8 +3,7 @@ from utils.profiling import timer
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import sparse,linalg,special
-from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import splu,cg
+from scipy.sparse.linalg import spsolve,splu,cg,eigsh
 
 MeV = 1e6
 # Setting params
@@ -170,6 +169,15 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
         jacobian = I - k/2*Lz - k/2*Dia_Fz
 
         if cg_tag:
+            # if i == 0:
+            #     ew1, ev = eigsh(jacobian, which='LM')
+            #     ew2, ev = eigsh(jacobian, sigma=1e-8)  
+            #     ew1 = abs(ew1)
+            #     ew2 = abs(ew2)
+            #     condJ = ew1.max()/ew2.min()
+            #     print(f"Condition Number = {condJ}")
+            
+            # print(1e-5*linalg.norm(v,ord = 2))
             du,info = cg(jacobian,fu,v)
             if info > 0 :
                 print("Convergence to tolerance not achieved")
@@ -562,16 +570,17 @@ if __name__ == "__main__":
 
     # plt.spy(L_2D)
     # plt.show()
-        
+
+    u3 = TrapCoolingCycle(v0,L_2D,fq,par)
     u = PRCoolingCycle2(v0,Lx,Lz,fq,par)
     # u2 = PRCoolingCycle(v0,L_2D,fq,par)
     # u3 = IsakCoolingCyclev2(v0,Lx,Lz,fq,par)
-    u3 = TrapCoolingCycle(v0,L_2D,fq,par)
+    
 
-    cg_tag = 0
-    print("----- Using spsolve in newton iterations ----- \n")
-    u2 = PRCoolingCycle2(v0,Lx,Lz,fq,par)
-    u5 = TrapCoolingCycle(v0,L_2D,fq,par)
+    # cg_tag = 0
+    # print("----- Using spsolve in newton iterations ----- \n")
+    # u2 = PRCoolingCycle2(v0,Lx,Lz,fq,par)
+    # u5 = TrapCoolingCycle(v0,L_2D,fq,par)
     # err2Norm = linalg.norm(u2 - u, 2) * h
     # print(f" error L2-norm : {err2Norm}")
 
