@@ -1,5 +1,6 @@
-from heatsim2d import define_parameters,set_nums,DiscLaplacian1D,use_parameters,set_xspace
-from utils.profiling import timer
+from .heatsim2d import define_parameters,set_nums,set_xspace
+from .operators import DiscLaplacian1D,DiscLaplacian
+from .utils.profiling import timer
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import sparse,linalg,special
@@ -66,7 +67,7 @@ def BoundaryConditionNeumann(Lh,h,q0,qend):
     return Lh.tocsr(),f_q
 
 ### Right now it is a general matrix but probablt just use 1D vector ?
-@use_parameters(1,6,9,10,12,13,20)
+# @use_parameters(1,6,9,10,12,13,20)
 def Fq(v,fq,h,T0,rho,C_p,sigma,epsilon,gamma):
     """
     Evaluates the boundary term  i.e. cooling terms given by Stefan-Boltzmann Law and Newton's law of cooling,
@@ -83,10 +84,10 @@ def Fq(v,fq,h,T0,rho,C_p,sigma,epsilon,gamma):
     c_bolt = sigma*epsilon/rho/C_p 
     c_newton = gamma/rho/C_p
     cdata = - (c_bolt*(((v_vals+T0)/100.0)**4-(T0/100.0)**4)) - c_newton*v_vals
-    u.data = cdata * h/2
+    u.data = cdata * 2/h
     return u
 
-@use_parameters(1,6,9,10,12,13,20)
+# @use_parameters(1,6,9,10,12,13,20)
 def dFq(v,fq,h,T0,rho,C_p,sigma,epsilon,gamma):
     """
     Evaluates the derivate wrt v of Fq(v) the boundary reaction term, constructed to find solution with Newtonsolver
@@ -102,10 +103,10 @@ def dFq(v,fq,h,T0,rho,C_p,sigma,epsilon,gamma):
     c_newton = gamma/rho/C_p
     #TODO Mabe negative ? 
     cdata = - 4*c_bolt*((v_vals+T0)/100)**3 *1/100 - c_newton 
-    u.data = cdata *h/2
+    u.data = cdata * 2/h
     return u
 
-@use_parameters(1,3,4,5,6,9,10,12,13,20)
+# @use_parameters(1,3,4,5,6,9,10,12,13,20)
 def IkFq(v,fq,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
     """ 
     Newton's method approximatioj of sol to u in:
@@ -140,7 +141,7 @@ def IkFq(v,fq,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
 
 
 show_jacobian = 0
-@use_parameters(1,3,4,5,6,9,10,12,13,20)
+# @use_parameters(1,3,4,5,6,9,10,12,13,20)
 def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
     """
     newton's metohd approx of sol to u in 
@@ -202,7 +203,7 @@ def IkFqLz(v,fq,Lz,h,k,maxit,tol,T0,rho,C_p,sigma,epsilon,gamma):
 # Import numerically stable sigmoid function
 exp = special.expit
     
-@use_parameters(0,1,7,9,10,16,17,18,19)
+# @use_parameters(0,1,7,9,10,16,17,18,19)
 def F2_t(s,M,h,L,rho,C_p,dEdz,Ib,sigma_x,sigma_y):
     """
     Temporary dP(t) function
