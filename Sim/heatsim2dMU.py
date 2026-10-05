@@ -8,9 +8,9 @@ from scipy.sparse.linalg import spsolve,splu,cg,eigsh
 MeV = 1e6
 # Setting params
 Ep,material,dS_,rho,C_p,p_freq,p,t_pulse,Ib,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters(t_pulse = 0.0015)
-k_pulse,k_pause,maxit,tol,N = set_nums(N = 150)
+k_pulse,k_pause,maxit,tol,N = set_nums(N = 50)
 
-h,M = set_xspace(L,Mx= 150)
+h,M = set_xspace(L,Mx= 50)
 
 tend = p / p_freq
 t_pause = (tend - p*t_pulse) / p
@@ -365,7 +365,7 @@ def PRCoolingCycle2(v0,Lx,Lz,fq,par):
         ## Sparse add
         
         # Operating (I +k/2Fq(wn) + LZ wn)
-        fqu = Fq(wn, fq, par)        # fqu is sparse csr vector 
+        fqu = Fq(w[:,n].copy(), fq, par)        # fqu is sparse csr vector 
         idx = fqu.indices
         wn[idx] += k/2* fqu.data
         wn = wn + k/2*Lz@wn 
@@ -375,7 +375,7 @@ def PRCoolingCycle2(v0,Lx,Lz,fq,par):
 
     return w
 @timer()
-def IsakCoolingCyclev2(v0,Lx,Lz,fq,par):
+def HeunCoolingCyclev2(v0,Lx,Lz,fq,par):
     """
     
     In version v2 the operators change from (Lh / Fq) to  (Lx / (Lz + Fq_z)) respectively, so the splitting is made across the dimension.
@@ -418,22 +418,18 @@ def IsakCoolingCyclev2(v0,Lx,Lz,fq,par):
         ## Sparse add
 
         # (I + k/2*Lx + k**2/8 Lx**2)
-        v = (I + k/2*Lx@(I+k/4*Lx)) @ wn
-        # "Inverse" operator 
+        v = (I + k*Lx@(I+k/2*Lx)) @ wn
         # explicit trapezoidal step
         fqu1 = Fq(v,fq,par)
         idx = fqu1.indices
         k1 = Lz@v 
         k1[idx] += fqu1.data
         alpha0 = v + k * k1
-    
         fqu2 = Fq(alpha0,fq,par)
         k2 = Lz @ alpha0
         k2[fqu2.indices] += fqu2.data
-
-        v = v + k/2 * ( k1+k2 )
         # Combine step
-        w[:,n+1] = (I + k/2*Lx@(I+k/4*Lx)) @ v
+        w[:,n+1] =  v + k/2 * ( k1+k2 )
     
     return w
 
@@ -477,12 +473,11 @@ def TrapCoolingCycle(v0,L,fq,par):
     for n in range(N):
         wn = w[:,n].copy()
         # Operate L_xz
-        v_rhs = (I +k/2*L) @ wn 
-        # Add Fq_z contri
         fqu = Fq(wn, fq, par)          # fqu is sparse csr vector 
         idx = fqu.indices
-        v_rhs[idx] += k/2* fqu.data
-
+        wn = (I +k/2*L) @ wn 
+        # Add Fq_z contri
+        wn[idx] += k/2* fqu.data
         # Newton Raphson method to find F(w_n+1) = wn      
         w[:,n+1] = IkFqLz(wn,fq,L,par)
 
@@ -571,7 +566,7 @@ if __name__ == "__main__":
     # plt.spy(L_2D)
     # plt.show()
 
-    u3 = TrapCoolingCycle(v0,L_2D,fq,par)
+    u1 = TrapCoolingCycle(v0,L_2D,fq,par)
     u = PRCoolingCycle2(v0,Lx,Lz,fq,par)
     # u2 = PRCoolingCycle(v0,L_2D,fq,par)
     # u3 = IsakCoolingCyclev2(v0,Lx,Lz,fq,par)
@@ -584,7 +579,7 @@ if __name__ == "__main__":
     # err2Norm = linalg.norm(u2 - u, 2) * h
     # print(f" error L2-norm : {err2Norm}")
 
-    err2Norm2 = linalg.norm(u3 - u, 2) * h
+    err2Norm2 = linalg.norm(u1 - u, 2) * h
     print(f" error L2-norm : {err2Norm2}")
 
     diff_time = t_pause  # total physical cooling time
@@ -603,7 +598,7 @@ if __name__ == "__main__":
 
         u_f = u[:, -1]
        
-        u2_f = u3[:, -1]  # Ensure u2 is defined in your scope
+        u2_f = u1[:, -1]  # Ensure u2 is defined in your scope
         # u_f = np.zeros_like(u2_f)
 
         # Unified color scale limits across both plots for accurate visual comparison
