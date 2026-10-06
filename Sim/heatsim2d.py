@@ -9,7 +9,6 @@ from Sim.config import build_sim
 
 
 
-
 def F2(cfg):
     """
     Evaluates the F2 - Pulse Reaction term given
