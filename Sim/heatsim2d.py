@@ -1,133 +1,12 @@
-from .utils.utils import import_PSTAR_data
-from functools import wraps
 import numpy as np
 import matplotlib.pyplot as plt
 from collections.abc import Callable    
 from scipy import sparse,linalg,optimize
 from scipy.sparse.linalg import spsolve,splu
-from .utils.profiling import timer,cpuprf
-from .operators import DiscLaplacian,F1,dF1
-from .config import build_sim
-### Units 
-MeV = 1e6
-mA = 1e-3
+from Sim.utils.profiling import timer,cpuprf
+from Sim.operators import DiscLaplacian,F1,dF1
+from Sim.config import build_sim
 
-def define_parameters (Ep = 90, 
-                        material = 'Cu',
-                        p_freq = 1,
-                        p = 10,                  # change to 2 to see behaviour
-                        t_pulse = 0.002,
-                        I_beam = 65 * mA,
-                        sigma_x = 2,
-                        sigma_y = 2,
-                        epsilon = 0.1,
-                        D = 0.4,
-                        L = 10,
-                        T0 = 300,
-                        gamma = 5.0,
-                        plot_option = 1
-                        ):
-
-    """
-    Basic configuration of parameters preset as default, add input to define_parameters to change setup.
-    
-    Parameters:
-        See return values as all parameters are directly returned.
-
-    Returns 
-        ------
-        Ep : float
-            Proton energy [MeV]
-        material : string
-            Target material
-        p_freq : float
-            Pulse frequency of proton beam
-        p : int
-            Number of pulses to simulate
-        t_pulse : float
-            Total time of 1 pulse
-        I_beam : float
-            Beam current in (mA)
-        sigma_x : float
-            Beam-size in x-direction
-        sigma_y : float
-            Beam-size in y-direction
-        epsilon : float
-            Emissivitiy of surrounding materil bounded to [0,1] 
-        D : float
-            Diffusitiviy constant D
-        L : float
-            Plate length of target (cm)
-        T0 : float
-            Initial Temperature (K)
-        gamma : float
-            Heat transfer Coefficient
-        plot_option : int - [0,1]
-            Option to plot, 1 to plot
-    Returns
-        -------
-        par : tuple
-            Tuple of all collected parameters specific to Beam setup and Material
-    
-    """
-    # dS_,rho_,Cp_     = import_PSTAR_data(material,Ep,0)
-    ### Overwrite from report #FIXME
-    ### very hardcoded
-    dS_,rho_,Cp_ = 1.67,8.9,0.44
-    return Ep,material,dS_,rho_,Cp_,p_freq,p,t_pulse,I_beam,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option
-
-#### Material / Controlled parameters ####
-
-Ep,material,dS_,rho_,Cp_,p_freq,p,t_pulse,I_beam,sigma_x,sigma_y,epsilon,D,L,T0,gamma,plot_option = define_parameters()
-##### Physical Parameters ##### 
-tend = p / p_freq                   # total time (s)
-rho = rho_                          # Blades-Nickel (g/cm^3)
-C_p = Cp_                           # Blades-Nickel (J/g/K)
-sigma = 5.67037442e-4               # 1e8 * Stefan-Boltzmann constant (W/((cm)^2 K^4)
-#epsilon = 0.1                      # Blades-Nickel (nounit)
-A = L**2                            # Area of impact (cm^2)
-t = 0.1                             # thickness of the material (cm) "Wild Guess" #FIXME
-V = A * t                           # Volume (cm^3) 
-dEdx = dS_ * MeV                    # Blades-Nickel (eV cm^2/g)
-Ib = I_beam                         # Beam peak current
-t_pulse = t_pulse                   # Pulse duration (s)
-t_pause = (tend - p*t_pulse) / p     # pulse "pause" duration
-
-
-def set_nums(N = 50, maxit = 100, tol = 1e-13):
-    """
-    Sets up temporal and newton iteration parameters.
-
-    Returns : 
-        k_pulse : Temporal time step (for fined pulse time)
-        k_pause : Temporal time step for coarse pause time
-        maxit(int) : Maximum iterations for Newton-Raphson algorithm (Added to have a certain stopping criterion)
-        tol(float) : Tolerance set for iterative stopping criteria, mainly for Newton-Raphson iterations
-        N (int) : Number of temporal grid points for time discretization
-    """
-    # TODO h is not constant! extract the spatial parameters in another function.
-    # h = L /(M+1)
-    kpulse = t_pulse/N
-    kpause = t_pause/N
-    return kpulse,kpause,maxit,tol,int(N)
-
-def set_xspace(Lx,Mx = 100):
-    """
-    Sets spatial numerical parameters for x direction
-
-    Returns:
-        hx (float) : Spatial time step in x direction
-        Mx (int) : Number of spatial grid points for spatial discretization in x direction
-
-    """
-    hx = Lx /(Mx+1)
-    return hx,Mx
-
-### Get Numerical Parameters
-k_pulse,k_pause,maxit,tol,N = set_nums()
-h,M = set_xspace(L,Mx = 512)
-
-par=[M,h,N,0,maxit,tol,T0,L,tend,rho,C_p,D,sigma,epsilon,A,V,dEdx,Ib,sigma_x,sigma_y,gamma]
 
 
 
@@ -145,11 +24,11 @@ def F2(cfg):
     rho = cfg.target.rho
     Lx = cfg.target.Lx 
     Ly = cfg.target.Ly
-
+    C_p = cfg.target.C_p
     # beam
     sigmax = cfg.beam.sigmax
     sigmay = cfg.beam.sigmay
-    
+    Ib = cfg.beam.Ib 
     # xs = np.linspace(h,L-h,M)
     # Clearer to me
     xs = np.linspace(h,h*M,M)
@@ -167,7 +46,7 @@ def F2(cfg):
     cy = Ly/2 
     dP = dEdx * Ib * rho / sigmax / sigmay/2/np.pi 
     dTdt = dP /rho / C_p
-    bprofile =  np.exp(-((x-cx)**2/2/sigma_x**2)-((y-cy)**2/2/sigma_y**2))
+    bprofile =  np.exp(-((x-cx)**2/2/sigmax**2)-((y-cy)**2/2/sigmay**2))
     u = dTdt * bprofile
     u = np.reshape(u,(M**2,))
     return u
@@ -187,7 +66,7 @@ def ImkF1(v,k,F1,dF1,cfg) -> np.array:
         u =  v
 
     ### TODO: Use scipy.optimize for this instead of implementing ones own, -> more flex
-    for i in range(maxit):
+    for i in range(cfg.time.maxit):
         # Function and derivative values
         F1u = F1(u,cfg)
         dF1u = dF1(u,cfg)
@@ -195,8 +74,8 @@ def ImkF1(v,k,F1,dF1,cfg) -> np.array:
         du = (u-k/2*F1u.toarray()-v) / (1-k/2 * dF1u.toarray())
         u = u - du
         # Convergence check / stopping crit
-        norm_du = h**(1/2)*linalg.norm(du,2)
-        if norm_du < tol :
+        norm_du = cfg.space.hx**(1/2)*linalg.norm(du,2)
+        if norm_du < cfg.time.tol :
             break
     return u
 
@@ -233,8 +112,8 @@ def ImLhF1(v, L, k, F1, dF1, cfg):
             break
     return u
 
-# @cpuprf
-# @timer(metric="monotonic")
+@cpuprf
+@timer(metric="monotonic")
 def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,sparse.csr_array],F2 : Callable[...,sparse.csr_array],cfg):
     """
     Solves the system for u with the Modified Peaceman-Rachford scheme (TODO should reference here) 
@@ -296,8 +175,8 @@ def modPRSolver(u0 : np.array,Laplaceh : sparse.dia_array,F1 : Callable[...,spar
         u[:,((i)*2*N+1):((i+1)*2*N+1)] = w[:,1:2*N+1]
 
     return u
-# @cpuprf
-# @timer(metric="monotonic")
+@cpuprf
+@timer(metric="monotonic")
 def TrapBasic(u0, Laplaceh, F1, F2, cfg):
     """
     Solves the system without splitting, using a simple Trapezoidal time stepping scheme
@@ -346,10 +225,12 @@ def TrapBasic(u0, Laplaceh, F1, F2, cfg):
         u[:, (i*2*N+1):((i+1)*2*N+1)] = w[:, 1:2*N+1]
     return u
 
+plot_option = 1
 if __name__ == "__main__":
-
+    
     cfg = build_sim(N = 50, Mx = 50, Lz = 0.1, p  = 10, p_freq=14)
     M = cfg.space.Mx
+    N = cfg.time.N
     ### Printing parameters for simulation
     print("---------- Parameters for Simulation -------------\n",
         f"Pulse period : {1/cfg.beam.p_freq} \n",
@@ -368,7 +249,7 @@ if __name__ == "__main__":
         f"T0 : {cfg.T0}\n")
 
 
-    dP = rho *Ib * dEdx
+    dP = cfg.target.rho * cfg.beam.Ib * cfg.target.dEdz
     print("dP : ",dP)
   
     # Creating Linear operators I and discrete Laplaceian Lh
@@ -377,30 +258,29 @@ if __name__ == "__main__":
     # Initial value u_0
     u0 = np.zeros(M**2)
     # Running modified PR and IE solver to compare
-    print(f"CFL Number for simulation: CFL = {k_pause/(h**2)}")
-    # u = TrapBasic(u0,Lh,F1,F2,par,cpuprf = True)    
-    u2 = modPRSolver(u0,Lh,F1,F2,cfg,cpuprf = True)
+    print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(cfg.space.hx**2)}")
+    u = TrapBasic(u0,Lh,F1,F2,cfg,cpuprf = True)    
+    u2 = modPRSolver(u0,Lh,F1,F2,cfg, cpuprf = True)
     ####   
     ##### Temporary plot to see results ####
 
     # Arbitrarily chosen temperature vector  
-    # uN = u[:,N+1]
+    uN = u[:,N+1]
     u2N = u2[:,N+1]
 
-    # # Absoltute and rel error
-    # err2Norm = linalg.norm(uN - u2N, 2) * h 
-    # print(f"Timestep are kpulse:{k_pulse} and kpause = {k_pause}")
-    # print(f"Error at Time step N: {err2Norm}")
-    # relerr = err2Norm / np.linalg.norm(uN)
-    # print(f"Relative L2 Error: {relerr:.4e}")
+    # Absoltute and rel error
+    err2Norm = linalg.norm(uN - u2N, 2) * cfg.space.hx 
+    print(f"Timestep are kpulse:{cfg.time.k_pulse} and kpause = {cfg.time.k_pause}")
+    print(f"Error at Time step N: {err2Norm}")
+    relerr = err2Norm / np.linalg.norm(uN)
+    print(f"Relative L2 Error: {relerr:.4e}")
 
     xs = np.linspace(0,cfg.space.Lx,M+2)
     x,y = np.meshgrid(xs,xs)
 
     mat = np.zeros((M+2,M+2), dtype = np.float32)
     mat[1:M+1,1:M+1] = u2[:,-1].reshape(M,M)
-    print("h: M: ")
-    print(h,M)    
+
     if plot_option:
         u_yt = u2.reshape((M,M,-1)) [ M//2 ,: , :] # will have shape [M,N]
         plt.imshow(u_yt, cmap = 'jet',interpolation = 'nearest')

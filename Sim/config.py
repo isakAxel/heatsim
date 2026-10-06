@@ -26,6 +26,7 @@ class TargetMaterial:
     def from_material(cls, Ep, material = 'Al',Lx=10.0, Ly=10.0, Lz=5.0, gamma=5.0):
         D, rho, C_p,epsilon = ut.import_mat_data(material)
         # dEdz = ut.import_PSTAR_data(material,Ep)
+        # TODO: Hardcoded dEdz
         dEdz = 1.67*MeV
         return cls(rho=rho, C_p=C_p, Lx=Lx, Ly=Ly, Lz=Lz, dEdz=dEdz,
                    epsilon=epsilon, D=D, gamma=gamma, material=material)

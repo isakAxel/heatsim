@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -6,9 +7,13 @@ from typing import Callable
 from Sim.config import build_sim,SimulationSetup
 import pandas as pd
 from Sim.heatsim2d import TrapBasic,modPRSolver,F1,F2
-from Sim.heatsim2dMU import PRCoolingCycle2
+from Sim.heatsim2dMU import (PRCoolingCycle, PRCoolingCycle2, TrapCoolingCycle,
+                             HeunCoolingCyclev2, BoundaryConditionNeumann,
+                             F2_xz, plot_field,sparse)
 from Sim.operators import DiscLaplacian,DiscLaplacian1D
 from datetime import datetime
+from Sim.utils.profiling import run_timed
+import Sim.visual as vis
 import glob
 
 def run_convergence_sweep(Ns,methodA : tuple[str,Callable], methodB : tuple[str,Callable], cfg : SimulationSetup ):
@@ -40,32 +45,61 @@ def run_convergence_sweep(Ns,methodA : tuple[str,Callable], methodB : tuple[str,
         save_results(f"2D_PR_TRAP_NsVsErrs_M{cfg.space.Mx}",results)
     return results
 
-def run_convergence_sweep_par(Ns,methodA : tuple[str,Callable], methodB : tuple[str,Callable], par ):
+def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSetup,refsol = None):
     """Run PR vs Trapezoidal for each N, return array of L2 errors."""
 
     nameA = methodA[0]
-    nameB = methodB[0]
-
     schemeA = methodA[1]
-    schemeB = methodB[1]
 
-    Lh = DiscLaplacian(0,par)              # geometry/material fixed -> compute once
-    u0 = np.zeros(Lh.shape[0]**2)
+    Mx = cfg.space.Mx
+    Mz = cfg.space.Mz
+    
+    Ix = sparse.eye_array(Mx, Mx)
+    Iz = sparse.eye_array(Mz + 2, Mz + 2)
+    
+    Lx = DiscLaplacian1D(cfg,axis = "x")
+    Lz = DiscLaplacian1D(cfg,axis = "z")
+    Lz,fq = BoundaryConditionNeumann(Lz,q0=1,qend=0)
+    
+    fq = sparse.kron(fq, np.ones((Mx,1)), format = "csr")
+    Lx = sparse.kron(Iz, Lx, format="csr")
+    Lz = sparse.kron(Lz, Ix, format="csr")
+    L_2D = (Lx + Lz).tocsr()
+    ## Continue here
+    ## 
+    
+    # TODO fix operators before running baseline
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(r"C:\Users\axelisaksson\Desktop\heatsim")
+    
+    # u0 = np.zeros(cfg.space.Mx * cfg.space.My)
+    cfg.time.N = int(1e5)
+    v0 = F2_xz(cfg) * cfg.beam.t_pulse 
+    results = {"N": np.array(Ns), "k_pause" : np.zeros(len(Ns)), f"errs" : np.zeros(len(Ns)),"time" : np.zeros(len(Ns))}
 
-    results = {"N": np.array(Ns), "k_pause" : np.zeros(len(Ns)), f"err_{nameA}_vs_{nameB}" : np.zeros(len(Ns))}
-
+    if refsol is None:
+        u_baseline = TrapCoolingCycle(v0,L_2D,0,fq,cfg)
+        path = f"./benchmarks/results/MU_refsol_M{M}_N{cfg.time.N}"
+        res = pd.Series(u_baseline)
+        ### Change directory to save
+        res.to_csv(path,sep = " ", index = False, float_format= "%.4e")
+    else:
+        u_baseline = np.loadtxt(f"./benchmarks/results/{refsol}",skiprows = 1)
+    plot_field(cfg,u_baseline,"Temperature distribution after CC", "Trapezoidal Baseline",True,True)
 
     for i, N in enumerate(Ns):
-        par[2] = N         # mutate TemporalParams, k_pulse/k_pause follow
-        print(f"N={N}  h={par[1]}  k_pause={cfg.time.k_pause:.4e}")
-        u_A = schemeA(u0,Lh,F1,F2,cfg)
-        u_B = schemeB(u0,Lh,F1,F2,cfg)
-
-        u_Af = u_A[:, N + 1]
-        u_Bf = u_B[:, N + 1]
-
-        results["k_pause"] = cfg.time.k_pause
-        results[f"err_{nameA}_vs_{nameB}"] = u_Af - u_Bf
+        cfg.time.N = N       # mutate TemporalParams, k_pulse/k_pause follow
+        print(f"N={N}  hx={cfg.space.hx}, hz={cfg.space.hz}  k_pause={cfg.time.k_pause:.4e}")
+        u_A, dt = run_timed(schemeA,v0,Lx,Lz,fq,cfg)
+        
+        
+        results["time"][i] = dt
+        results["k_pause"][i] = cfg.time.k_pause
+        if np.isinf(u_A).any() or np.isnan(u_A).any():
+            results[f"errs"][i] = "INF"
+        else:
+            results[f"errs"][i] = linalg.norm(u_A - u_baseline, ord = 2) *cfg.space.hx**(1/2)*cfg.space.hz**(1/2)
+        plot_field(cfg,u_A,"Tempereture distribution after CC. ",nameA,True,True)
         
     return results
 
@@ -105,76 +139,77 @@ def read_results(simname, datetime = None ,root ="./benchmarks/results") -> pd.D
     
     return pd.read_csv(readstr, sep = r"\s+", engine = "python")
 
-def plot_errors(ks, errs, title,**kwargs):
+# def plot_errors(ks, errs, title,**kwargs):
 
-    ks = np.asarray(ks)
-    errs = np.asarray(errs)
+#     ks = np.asarray(ks)
+#     errs = np.asarray(errs)
     
-    plt.loglog(ks, errs, 'rx', **kwargs)
-    plt.title(title)
+#     plt.loglog(ks, errs, 'rx', **kwargs)
+#     plt.title(title)
 
-    # 2. Extract first marker as the common origin point
-    x0, y0 = ks[0], errs[0]
+#     # 2. Extract first marker as the common origin point
+#     x0, y0 = ks[0], errs[0]
 
-    # 3. Span reference domain from first point to last point
-    x_ref = np.logspace(np.log10(x0), np.log10(ks[-1]), 100)
+#     # 3. Span reference domain from first point to last point
+#     x_ref = np.logspace(np.log10(x0), np.log10(ks[-1]), 100)
 
-    # 4. Compute constants anchored to (x0, y0)
-    c_slope1 = y0 / x0
-    c_slope2 = y0 / (x0**2)
+#     # 4. Compute constants anchored to (x0, y0)
+#     c_slope1 = y0 / x0
+#     c_slope2 = y0 / (x0**2)
 
-    # 5. Evaluate cone boundaries
-    y_slope1 = c_slope1 * x_ref
-    y_slope2 = c_slope2 * (x_ref**2)
+#     # 5. Evaluate cone boundaries
+#     y_slope1 = c_slope1 * x_ref
+#     y_slope2 = c_slope2 * (x_ref**2)
 
-    # 6. Plot the fan/cone reference lines
-    plt.loglog(x_ref, y_slope1, ':', color='green', label=r"Slope 1 ($y \propto x$)")
-    plt.loglog(x_ref, y_slope2, '--', color='blue', label=r"Slope 2 ($y \propto x^2$)")
+#     # 6. Plot the fan/cone reference lines
+#     plt.loglog(x_ref, y_slope1, ':', color='green', label=r"Slope 1 ($y \propto x$)")
+#     plt.loglog(x_ref, y_slope2, '--', color='blue', label=r"Slope 2 ($y \propto x^2$)")
     
-    plt.xlabel("Time step size 'k_pause'")
-    plt.ylabel("error L_2 Norm")
-    plt.gca().invert_xaxis()
-    plt.grid(True,which='both')
-    if 'label' in kwargs:
-        plt.legend()    
-    plt.show()
-
+#     plt.xlabel("Time step size 'k_pause'")
+#     plt.ylabel("error L_2 Norm")
+#     plt.gca().invert_xaxis()
+#     plt.grid(True,which='both')
+#     if 'label' in kwargs:
+#         plt.legend()    
+#     plt.show()
 
 
 def plot_main(M):
-    
-    sim_test_name =  f"2D_PR_TRAP_NsVsErrs_M{M}"
-    results = read_results(sim_test_name)
 
-    ks = results["k_pause"]
-    errs = results["err"]
-    plt.figure(figsize=(8, 6))
-    # Imported data from previous simulation
-    dat = np.loadtxt("./benchmarks/results/2D_PR_TRAP_NsVsErrsImport/errs.log")
-    pausetime = 0.998
-    errs2 = dat[:,1]
-    ks2 = pausetime / dat[:,0]
+    simnameDS = f"2DMU_PR_DS_NsVsErrs_M{M}"
+    simnameBS = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    simnameTrap = f"2DMU_TRAP_NsVsErrs_M{M}"
+
+    resDS = read_results(simnameDS)
+    resBS = read_results(simnameBS)
+    resTrap = read_results(simnameTrap)
+    ks = [ resBS["k_pause"] , resDS["k_pause"],resTrap["k_pause"]]
+    errs = [resBS["errs"], resDS["errs"],resTrap["errs"]]
+    # time = [resBS["time"], resDS["time"]]
+
     # plt.loglog(ks2,errs2,'rx')
-    plot_errors(ks,errs,title = "Log Errors of Modified PR solver compared to Trapezoidal rule", 
-                label = f"Spatial res: M = {M}")
-    plot_errors(ks2,errs2,title = "Log Errors of Modified PR Solver compared to Trapezoidal rule", 
-                label = f"Spatial res: M = {M}")
-    
+    vis.plot_errors(ks,errs,["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"],title = f"Logarithmic errors over varying time resolutions.",
+                    fname = "PR_errs_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}")
+
 if __name__ == "__main__":
     
-    Ns = np.array([50*i for i in range(7,16)])
-    M = 512 
-    # print(f"Trial for M = {M} and Ns = {Ns}")
-    # sim_test_name = f"2D_PR_TRAP_NsVsErrs_M{M}"
-    
-    cfg = build_sim(N=Ns[0], Mx = M,My= M )
-    print("Pause time is:", cfg.time.t_pause)
 
-    # results = run_convergence_sweep(Ns,("Trap_Rule",TrapBasic),("PRMod",modPRSolver), cfg)
-    # # results = read_results(sim_test_name) 
-    # resdf = save_results(sim_test_name,results)
+    Ns = np.array([50] + [100,300,900,1000])
     
-    # print(f"Saved results to {sim_test_name}\n",
-    #       "-------- Results : ----------\n",resdf)
-
+    M = 512
     plot_main(M)
+   # #  
+   # print(f"Trial for M = {M} and Ns = {Ns}")
+   # sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
+   # 
+   # cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
+   # print("Pause time is:", cfg.time.t_pause)
+   # # refsol = "MU_refsol_M256_N100"
+   # refsol = "MU_refsol_M512_N100000"
+   # results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
+   # # results = read_results(sim_test_name) 
+   # resdf = save_results(sim_test_name,results)
+   # 
+   # print(f"Saved results to {sim_test_name}\n",
+   # "-------- Results : ----------\n",resdf)
+    
