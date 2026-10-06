@@ -15,12 +15,22 @@ def DiscLaplacian(cfg) -> sparse.sparray[float]:
     Lh = sparse.kronsum(K,K)    ### kron(K,I) + kron(I,K) 
     return Lh
 
-def DiscLaplacian1D(cfg) -> sparse.sparray[float]:
+def DiscLaplacian1D(cfg,axis = "x") -> sparse.sparray[float]:
     """
-    Creating discrete Laplacian Lh for 1D - a (M x M) matrix
+    Creating discrete 1D Laplacian Lh along a given axis {"x","y","z"} - a (M x M) matrix
     """
-    M = cfg.space.Mx
-    h = cfg.space.hx
+    if axis == "x":
+        M = cfg.space.Mx
+        h = cfg.space.hx
+    elif axis == "y":
+        M = cfg.space.My
+        h = cfg.space.hy
+    elif axis == "z":
+        M = cfg.space.Mz
+        h = cfg.space.hz
+    else:
+        raise ValueError("axis must be x y or z")
+        
     rho, C_p, D = cfg.target.rho, cfg.target.C_p, cfg.target.D
 
     C = D/rho / C_p
@@ -55,7 +65,6 @@ def F1(v,cfg,fq = None) -> sparse.sparray:
         hz = cfg.space.hz
         ### TODO: idx optimization precompute
         #
-        print("hello")
         idx = fq.nonzero()[0]
         fu = fq.copy()
         fu.data = -(c_bolt*(((v[idx]+T0)/100.0)**4-(T0/100.0)**4) + c_newton*v[idx]) * 2/hz
