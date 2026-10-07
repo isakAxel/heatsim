@@ -73,19 +73,22 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
     os.chdir(r"C:\Users\axelisaksson\Desktop\heatsim")
     
     # u0 = np.zeros(cfg.space.Mx * cfg.space.My)
-    cfg.time.N = int(1e5)
+    baseline_resolution = int(1e4)
+    cfg.time.N = baseline_resolution
     v0 = F2_xz(cfg) * cfg.beam.t_pulse 
     results = {"N": np.array(Ns), "k_pause" : np.zeros(len(Ns)), f"errs" : np.zeros(len(Ns)),"time" : np.zeros(len(Ns))}
 
     if refsol is None:
-        u_baseline = TrapCoolingCycle(v0,L_2D,0,fq,cfg)
-        path = f"./benchmarks/results/MU_refsol_M{M}_N{cfg.time.N}"
+        print(f"Running baseline:M = {cfg.space.Mx}, N = {cfg.time.N}")
+        u_baseline = TrapCoolingCycle(v0,Lx,Lz,fq,cfg)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = f"./benchmarks/data/MU_refsol_M512_N100000_2"
         res = pd.Series(u_baseline)
         ### Change directory to save
         res.to_csv(path,sep = " ", index = False, float_format= "%.4e")
     else:
-        u_baseline = np.loadtxt(f"./benchmarks/results/{refsol}",skiprows = 1)
-    plot_field(cfg,u_baseline,"Temperature distribution after CC", "Trapezoidal Baseline",True,True)
+        u_baseline = np.loadtxt(f"./benchmarks/data/{refsol}",skiprows = 1)
+    # plot_field(cfg,u_baseline,"Temperature distribution after CC", "Trapezoidal Baseline",True,True)
 
     for i, N in enumerate(Ns):
         cfg.time.N = N       # mutate TemporalParams, k_pulse/k_pause follow
@@ -106,7 +109,7 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
 
 
 
-def save_results(sim_test_name, results: dict, root="./benchmarks/results"):
+def save_results(sim_test_name, results: dict, root="./benchmarks/data"):
     """
     Save sweep results (a dict of equal-length arrays, e.g. from
     run_convergence_sweep) to <root>/<sim_test_name>/err.log, and return
@@ -123,7 +126,7 @@ def save_results(sim_test_name, results: dict, root="./benchmarks/results"):
 
     return df
 
-def read_results(simname, datetime = None ,root ="./benchmarks/results") -> pd.DataFrame:
+def read_results(simname, datetime = None ,root ="./benchmarks/data") -> pd.DataFrame:
     """
     Read results from table stored in root directory
     """
@@ -194,22 +197,44 @@ def plot_main(M):
 if __name__ == "__main__":
     
 
-    Ns = np.array([50] + [100,300,900,1000])
-    
+    Ns = np.array([50] + [100*i for i in range(1,11)])
+
     M = 512
-    plot_main(M)
-   # #  
-   # print(f"Trial for M = {M} and Ns = {Ns}")
-   # sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
-   # 
-   # cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
-   # print("Pause time is:", cfg.time.t_pause)
-   # # refsol = "MU_refsol_M256_N100"
-   # refsol = "MU_refsol_M512_N100000"
-   # results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
-   # # results = read_results(sim_test_name) 
-   # resdf = save_results(sim_test_name,results)
-   # 
-   # print(f"Saved results to {sim_test_name}\n",
-   # "-------- Results : ----------\n",resdf)
+    # plot_main(M)
+    cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
+    print(f"Trial for M = {M} and Ns = {Ns}")
+    print("------Pause time is:", cfg.time.t_pause, "-----\n")
+
+    refsol = "MU_refsol_M512_N100000"
+    # sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
+    # results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
+    # resdf = save_results(sim_test_name, results)
+
+    # print(f"Saved results to {sim_test_name}\n",
+    # "-------- Results : ----------\n",resdf)
+
+    sim_test_name = f"2DMU_PR_DS_NsVsErrs_M{M}"
+    # refsol = "MU_refsol_M512_N100000"
+    resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split", PRCoolingCycle2), cfg,refsol = refsol)
+    resdf = save_results(sim_test_name,resultsDS)
+
+    print(f"Saved results to {sim_test_name}\n",
+        "-------- Results : ----------\n",resdf)
+
+    sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    # refsol = "MU_refsol_M512_N100000"
+    resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
+    resdf = save_results(sim_test_name,resultsDS)
+    print(f"Saved results to {sim_test_name}\n",
+    "-------- Results : ----------\n",resdf)
+
+    # Ns = [80_000, 100_000, 120_000, 140_000, 160_000, 180_000, 200_000, 220_000]
+
+    # sim_test_name = f"2DMU_Heun_NsVsErrs_M{M}"
+    # refsol = "MU_refsol_M512_N100000_2"
+    # resultsDS = run_convergence_sweep_MU(Ns,("Heuns Method", HeunCoolingCyclev2), cfg,refsol = refsol)
+    # resdf = save_results(sim_test_name,resultsDS)
+    # print(f"Saved results to {sim_test_name}\n",
+    # "-------- Results : ----------\n",resdf)
+
     
