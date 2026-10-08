@@ -151,26 +151,49 @@ def read_results(simname, datetime = None ,root ="./benchmarks/data") -> pd.Data
 
 def PlotEfficiency(M):
 
-    simnames = [f"2DMU_PR_DS_NsVsErrs_M{M}", f"2DMU_PR_BS_NsVsErrs_M{M}",  f"2DMU_PR_TRAP_NsVsErrs_M{M}"]
+    simnames = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}"]
 
     res = [read_results(sim) for sim in simnames]
-    
+    methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"]
+
+    vis.plot_efficiency(res,methods,"Logarithmic error over computation time", M,f"eff_PR_BS_DS_TRAP_M{M}")
+
 def PlotMain(M):
 
-    simnameDS = f"2DMU_PR_DS_NsVsErrs_M{M}"
     simnameBS = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    simnameDS = f"2DMU_PR_DS_NsVsErrs_M{M}"
     simnameTrap = f"2DMU_TRAP_NsVsErrs_M{M}"
 
-    resDS = read_results(simnameDS)
     resBS = read_results(simnameBS)
+    resDS = read_results(simnameDS)
     resTrap = read_results(simnameTrap)
+
     ks = [ resBS["k_pause"] , resDS["k_pause"],resTrap["k_pause"]]
     errs = [resBS["errs"], resDS["errs"],resTrap["errs"]]
     # time = [resBS["time"], resDS["time"]]
 
     # plt.loglog(ks2,errs2,'rx')
     vis.plot_errors(ks,errs,["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"],title = f"Logarithmic errors over varying time resolutions.",
-                    fname = "PR_errs_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}")
+                    fname = "PR_errs_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}",ylim = [1e-6,1e-1])
+    
+    spliterrDS = resTrap['errs'] - resDS["errs"] 
+
+    spliterrBS = np.abs( resTrap['errs'] - resBS["errs"]) 
+    ks = resBS["k_pause"]
+
+    plt.close()
+    plt.loglog(ks,spliterrBS,'x',label = "splitting error BS")
+    plt.loglog(ks,spliterrDS,'x',label = "splitting error DS")
+    plt.legend()
+    plt.grid(which= 'both')
+    plt.ylabel = "Error L2norm"
+    plt.xlabel = "k - step size"
+    
+    plt.show()
+
+    # vis.plot_errors(ks,[spliterrBS,spliterrDS,spliterrTrap],["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"],title = f"Splitting errors over time resolutions.",
+                    # fname = "PR_spliterr_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}" )
+
 def BenchmarkMain():
 
     Ns = np.array([100 * i for i in range(1,11) ])
@@ -216,6 +239,7 @@ if __name__ == "__main__":
 
     Ns = np.array([100 * i for i in range(1,11) ])
     M = 512
+    # PlotEfficiency(M)
     PlotMain(M)
 
 
