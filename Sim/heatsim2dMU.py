@@ -93,7 +93,7 @@ def IkF(v, k, fq, cfg):
     Newton approximation of u in  (I - k/2 F1_q) u = v
     F1_q only acts on the boundary points given by fq's pattern.
     """
-    h = cfg.space.hx
+    w = (cfg.space.hx * cfg.space.hz ) ** (1/2)
     idx = fq.nonzero()[0]
     u = v.copy()
     for i in range(cfg.time.maxit):
@@ -102,7 +102,7 @@ def IkF(v, k, fq, cfg):
         du = np.zeros_like(u)
         du[idx] = (u[idx] - k/2 * Fu - v[idx]) / (1.0 - k/2 * dFu)
         u -= du
-        if np.sqrt(h) * linalg.norm(du, 2) < cfg.time.tol:
+        if w * linalg.norm(du, 2) < cfg.time.tol:
             break
     return u
 
@@ -320,7 +320,7 @@ def plot_field(cfg, u_vec, title, method, mark_max=False,save_fig=False):
                 markeredgecolor="black", label=f"Max Temperature = {u_vec[iz*Mx+ix]:.1f}")
         ax.legend(loc="upper right")
     if save_fig:
-        path = f"./benchmarks/results/imgs/"
+        path = f"./benchmarks/data/imgs/"
         fig.savefig(path + f"Temp_{method}_M{Mx}_N{N}.png", dpi=200, bbox_inches="tight")
         plt.close(fig)     
     else:
