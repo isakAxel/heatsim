@@ -4,7 +4,9 @@ import numpy as np
 
 import Sim.heatsim2d as s
 import pandas as pd
-
+import Sim.operators as op
+from Sim.heatsim2dMU import BoundaryConditionNeumann,F2_xz,F1
+from scipy import sparse,linalg
 
 def compute_coeffs(n_dU,T_end,cfg):
 
@@ -49,9 +51,56 @@ def c_analysis(n_dU,T_end):
     print("------ Relative Coefficient values --------")
     print(df.to_string())
 
-        
+
+def check_comm(A,B,v0):
+  """
+  calculates the commutator between linear (matrix) A and nonlinear reaction term B
+
+  Params:
+
+  """
 
 
-n = 11
-T_end = 1000
-c_analysis(n,T_end)
+  comm = B(A@v0) - A @ B(v0)
+
+
+  return comm
+
+def TestComm():
+  cfg = s.build_sim(t_pulse = 1.5e-3)
+  Mx = Mz = cfg.space.Mx
+
+  Ix = sparse.eye_array(Mx, Mx)
+  Iz = sparse.eye_array(Mz + 2, Mz + 2)
+  
+  Lx = op.DiscLaplacian1D(cfg,"x")
+  Lz = op.DiscLaplacian1D(cfg,"z")
+  Lz, fq = BoundaryConditionNeumann(Lz,1,0)
+
+  Lx = sparse.kron(Iz,Lx,format = "csr")
+  Lz = sparse.kron(Lz,Ix,format = "csr") 
+
+  fq = sparse.kron(fq,np.ones((Mx,1)) ,format = "csr")
+  v0 = F2_xz(cfg) * cfg.beam.t_pulse
+
+  def FqLz(v):
+    
+    idx = fq.nonzero()[0]
+    k = cfg.time.k_pause
+
+    vnew = v + k/2*(Lz@v)
+    vnew[idx] += k/2*F1(v,cfg,fq).data
+
+    return vnew
+
+  comm = check_comm(Lx,FqLz,v0)
+  print(f"Value of commutator : {comm}")
+  normcomm = linalg.norm(comm,ord = 2)
+  print(f"norm of commutator : {normcomm}")
+
+if __name__ == '__main__':
+  # n = 11
+  # T_end = 1000
+  # c_analysis(n,T_end)
+
+  TestComm()
