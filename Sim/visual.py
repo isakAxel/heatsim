@@ -5,11 +5,13 @@ import os
 This is a module for plotting the simulations WIP
 """
 
-def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",ylim = None,**kwargs):
+def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",ylim = None,ylabel = "error",**kwargs):
 
     nplots = len(ks)
     fig,axes = plt.subplots(ncols = nplots, figsize = (17,8))
-
+    # Hotfix
+    axes = [axes] if nplots == 1 else axes
+    
     for k,err,ax,met in zip(ks,errs,axes,methods):
         
         k = np.asarray(k)
@@ -21,9 +23,7 @@ def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",yli
 
         # 2. Extract first marker as the common origin point
         x0, y0 = k[0], err[0]
-        # if met == "PR-Dimensional Split":
-        #     x0,y0 = k[1],err[1]
-
+       
         # 3. Span reference domain from first point to last point
         x_ref = np.logspace(np.log10(x0), np.log10(k[-1]), 100)
 
@@ -41,9 +41,11 @@ def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",yli
 
         if ylim:
             ax.set_ylim(ylim[0],ylim[1])
-
         ax.set_xlabel("Time step size 'k_pause'")
-        ax.set_ylabel("error L_2 Norm")
+
+        if ylabel:
+            ax.set_ylabel(ylabel)
+                
         ax.grid(True,which='both')
         if 'label' in kwargs:
             ax.legend() 
@@ -81,7 +83,6 @@ def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency" 
         ax.set_xlabel("Time t for simulation in seconds")
         ax.set_ylabel(rf"Error $L_2$-Norm")
         ax.grid(True, which = 'both') 
-        ax.set_ylim(1e-6,1e-1)
         
         ax.legend()
         

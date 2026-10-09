@@ -87,7 +87,7 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
     
    
     v0 = F2_xz(cfg) * cfg.beam.t_pulse 
-    results = {"N": np.array(Ns), "k_pause" : np.zeros(len(Ns)), f"errs" : np.zeros(len(Ns)),"time" : np.zeros(len(Ns))}
+    results = {"N": np.array(Ns), "k_pause" : np.zeros(len(Ns)), f"errs" : np.zeros(len(Ns)),"time" : np.zeros(len(Ns)),"err_Linf" : np.zeros(len(Ns))}
 
     if refsol is None:
         print(f"Running baseline:M = {cfg.space.Mx}, N = {N_base}")
@@ -109,6 +109,8 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
             results[f"errs"][i] = "INF"
         else:
             results[f"errs"][i] = linalg.norm(u_A - u_baseline, ord = 2) *cfg.space.hx**(1/2)*cfg.space.hz**(1/2)
+            results[f"err_Linf"][i] = ninf =  linalg.norm(u_A - u_baseline, ord = np.inf)         ### Run with this value as well to see difference
+            print("Norminf:",ninf)  
         plot_field(cfg,u_A,"Tempereture distribution after CC. ",nameA,True,True)
         
     return results
@@ -171,17 +173,23 @@ def PlotMain(M):
     ks = [ resBS["k_pause"] , resDS["k_pause"],resTrap["k_pause"]]
     errs = [resBS["errs"], resDS["errs"],resTrap["errs"]]
     # time = [resBS["time"], resDS["time"]]
+    errInf = [resBS["err_Linf"],resDS["err_Linf"],resTrap["err_Linf"]]
 
     # plt.loglog(ks2,errs2,'rx')
     vis.plot_errors(ks,errs,["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"],title = f"Logarithmic errors over varying time resolutions.",
-                    fname = "PR_errs_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}",ylim = [1e-6,1e-1])
+                    fname = "PR_errs_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}",ylim = [1e-7,1e-1],ylabel = f'error $L_2$-norm')
     
+   
+    plt.close()
+    vis.plot_errors(ks,errInf,["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"], title= f"Logarithmic errorrs over varying N", 
+                    fname="PR_errs_BS_Linf", label = f"Spatial resolution M = {M}", ylim = [1e-7,1e-1],ylabel = fr'error $L_\infty$-norm')
+    plt.close()
     spliterrDS = resTrap['errs'] - resDS["errs"] 
 
     spliterrBS = np.abs( resTrap['errs'] - resBS["errs"]) 
     ks = resBS["k_pause"]
 
-    plt.close()
+    
     plt.loglog(ks,spliterrBS,'x',label = "splitting error BS")
     plt.loglog(ks,spliterrDS,'x',label = "splitting error DS")
     plt.legend()
@@ -193,10 +201,23 @@ def PlotMain(M):
 
     # vis.plot_errors(ks,[spliterrBS,spliterrDS,spliterrTrap],["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"],title = f"Splitting errors over time resolutions.",
                     # fname = "PR_spliterr_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}" )
+def CalcTime():
+    simnameBS = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    simnameDS = f"2DMU_PR_DS_NsVsErrs_M{M}"
+    simnameTrap = f"2DMU_TRAP_NsVsErrs_M{M}"
 
+    resBS = read_results(simnameBS)
+    resDS = read_results(simnameDS)
+    resTrap = read_results(simnameTrap)
+
+    sum = 0
+    for res in (resBS,resDS,resTrap):
+        sum += np.sum(res["time"])
+
+    print(f"Total time for last sim was {sum/60} min")
 def BenchmarkMain():
 
-    Ns = np.array([100 * i for i in range(1,11) ])
+    Ns = np.array([100 * i for i in range(1,16) ])
     M = 512
     cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
     print(f"Trial for M = {M} and Ns = {Ns}")
@@ -205,13 +226,12 @@ def BenchmarkMain():
     refsol = "MU_refsol_M512_N100000"
     print("Using refsol : ", refsol)
 
-    sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
-    results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = None,N_base=100000,NewBase=refsol)
-    resdf = save_results(sim_test_name, results)
-
+    sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
+    resdf = save_results(sim_test_name,resultsDS)
     print(f"Saved results to {sim_test_name}\n",
-        "-------- Results : ----------\n",resdf)
-    
+    "-------- Results : ----------\n",resdf)
+
 
     print("refsol= ",refsol)
     sim_test_name = f"2DMU_PR_DS_NsVsErrs_M{M}"
@@ -220,12 +240,14 @@ def BenchmarkMain():
     print(f"Saved results to {sim_test_name}\n",
         "-------- Results : ----------\n",resdf)
 
-    sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
-    resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
-    resdf = save_results(sim_test_name,resultsDS)
-    print(f"Saved results to {sim_test_name}\n",
-    "-------- Results : ----------\n",resdf)
 
+    print("refsol= ",refsol)
+    sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
+    results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
+    resdf = save_results(sim_test_name, results)
+    print(f"Saved results to {sim_test_name}\n",
+        "-------- Results : ----------\n",resdf)
+    
     # Ns = [80_000, 100_000, 120_000, 140_000, 160_000, 180_000, 200_000, 220_000]
 
     # sim_test_name = f"2DMU_Heun_NsVsErrs_M{M}"
@@ -241,6 +263,9 @@ if __name__ == "__main__":
     M = 512
     # PlotEfficiency(M)
     PlotMain(M)
+    CalcTime()
+    # BenchmarkMain()
+    
 
 
     
