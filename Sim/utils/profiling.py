@@ -67,6 +67,13 @@ def cpuprf(func):
         return sol
     return inner
 
+def run_timed(func, *args, name=None, **kwargs):
+    """Call a @timer-decorated solver, return (result, seconds)."""
+    t0 = time.perf_counter()
+    result = func(*args, timeit=False, **kwargs)     # decorator stays silent
+    dt = time.perf_counter() - t0
+    print(f"[{name or func.__name__}] Execution time: {dt:.4f} seconds")
+    return result, dt
 
 ### Sandbox testing
 
