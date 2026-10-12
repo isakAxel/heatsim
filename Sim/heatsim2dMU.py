@@ -399,25 +399,25 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 512
-    cfg = build_sim(N=50, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 256
+    cfg = build_sim(N=100, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
-    print("---------- Parameters for Simulation -------------\n",
-          f"Simulation Material : {cfg.target.material} \n",
-          f"Pulse period : {1/cfg.beam.p_freq} \n",
-          f"Pulse frequency : {cfg.beam.p_freq:.2f} \n",
-          f"Pulse length : {cfg.beam.t_pulse} \n",
-          f"Energy : {cfg.beam.Ep} \n",
-          f"Time without pulse (Pause length): {cfg.time.t_pause}\n",
-          f"Density rho : {cfg.target.rho}\n",
-          f"Specific Heat Cp: {cfg.target.C_p}\n",
-          f"Stopping power dEdz: {cfg.target.dEdz:.2E}\n",
-          f"Peak current Ib : {cfg.beam.Ib}\n",
-          f"Sigmax : {cfg.beam.sigmax} \n",
-          f"Sigmay : {cfg.beam.sigmay} \n",
-          f"T0 : {cfg.T0}\n")
+    # print("---------- Parameters for Simulation -------------\n",
+    #       f"Simulation Material : {cfg.target.material} \n",
+    #       f"Pulse period : {1/cfg.beam.p_freq} \n",
+    #       f"Pulse frequency : {cfg.beam.p_freq:.2f} \n",
+    #       f"Pulse length : {cfg.beam.t_pulse} \n",
+    #       f"Energy : {cfg.beam.Ep} \n",
+    #       f"Time without pulse (Pause length): {cfg.time.t_pause}\n",
+    #       f"Density rho : {cfg.target.rho}\n",
+    #       f"Specific Heat Cp: {cfg.target.C_p}\n",
+    #       f"Stopping power dEdz: {cfg.target.dEdz:.2E}\n",
+    #       f"Peak current Ib : {cfg.beam.Ib}\n",
+    #       f"Sigmax : {cfg.beam.sigmax} \n",
+    #       f"Sigmay : {cfg.beam.sigmay} \n",
+    #       f"T0 : {cfg.T0}\n")
 
     # --- Operators ---------------------------------------------------
     Ix = sparse.eye_array(Mx, Mx)
@@ -433,29 +433,29 @@ if __name__ == "__main__":
 
     # --- Initial value after heating pulse ----------------------------
     v0 = F2_xz(cfg) * cfg.beam.t_pulse
-    print("Temperature max after pulse:", np.max(v0))
-    if plot_option:
-        plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
+    # print("Temperature max after pulse:", np.max(v0))
+    # if plot_option:
+    #     plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
 
     # --- Solve --------------------------------------------------------
-    # u = PRCoolingCycle2(v0, Lx, Lz, fq, cfg)
-    u2 = TrapCoolingCycle(v0,Lx,Lz,fq,cfg)
+    u = PRCoolingCycle2(v0, Lx, Lz, fq, cfg)
+    u2 = PRCoolingCycle(v0,Lx,Lz,fq,cfg)
     # err2Norm = linalg.norm(u2 - u, 2) * h
     # print(f" error L2-norm : {err2Norm}")
 
-    # --- Diagnostics --------------------------------------------------
-    diff_coeff = cfg.target.D / (cfg.target.rho * cfg.target.C_p)
-    diff_length = np.sqrt(diff_coeff * cfg.time.t_pause)
-    print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
-    print(f"That's {diff_length/h:.1f} grid cells")
-    print(f"dt = {max(cfg.time.k_pause, cfg.time.k_pulse)}")
-    print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
+    # # --- Diagnostics --------------------------------------------------
+    # diff_coeff = cfg.target.D / (cfg.target.rho * cfg.target.C_p)
+    # diff_length = np.sqrt(diff_coeff * cfg.time.t_pause)
+    # print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
+    # print(f"That's {diff_length/h:.1f} grid cells")
+    # print(f"dt = {max(cfg.time.k_pause, cfg.time.k_pulse)}")
+    # print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
 
 
-    if plot_option:
-        plot_field(cfg, u2,
-                   f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
-                   "Peaceman Rachford",
-                   mark_max=True)
+    # if plot_option:
+    #     plot_field(cfg, u2,
+    #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
+    #                "Peaceman Rachford",
+    #                mark_max=True)
 
-    # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Trapezoidal Rule'))
+    # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Boundary Split'))

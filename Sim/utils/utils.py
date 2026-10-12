@@ -1,7 +1,11 @@
 # import numpy as np
+import os
 from star import ProtonSTARCalculator,ProtonMaterials
 from mendeleev import element
 
+# SRIM imports
+from srim import TRIM,Layer,Target,Ion,output
+from Sim.paths import srimexepath
 
 """
     Module where different types of utilities will reside, such as data-processing, fetching
@@ -70,6 +74,35 @@ def import_mat_data(material):
     return k,rho,c_p,eps
     
 
+def calculate_stoppingpower(material: str,Ep,Lz,rho,plot = False):
+
+    proton = Ion("H",energy=Ep*1e6)
+
+    layerwidth = 7.0 # [cm]
+    layerwidthAng = layerwidth *  1e7
+    layer = Layer({
+        material : {
+            'stoich': 1.0,
+            'E_d': 30.0,
+            'lattice': 0.0,
+            'surface': 3.0
+        }}, density=rho, width = layerwidthAng) # [Å] -> 1e-4 [cm]
+    
+  
+    target = Target([layer])
+    trim = TRIM(target,proton, number_ions = 50)
+    srim_executable_directory = srimexepath
+
+    results = trim.run(srim_executable_directory)
+    print("Printing Results :")
+    print(results)
+    output_dir = r'/data/srim_output'
+    os.makedirs(output_dir,exist_ok=True)
+    TRIM.copy_output_files(srim_executable_directory,output_dir)
+    ### Parse all srim calculations
+    results_parsed = output.Results(srim_executable_directory)
+    
+
 EMISSIVITY_TABLE = {
     "Al" : 0.2,
     "Ni" : 0.4,
@@ -82,10 +115,16 @@ SOLIDS_TABLE = {
 }
 
 if __name__ == '__main__':
-    k,rho,cp,eps = import_mat_data("SS316L")
-    print(k,rho,cp)
-    print("epsy",eps)
-    # Ep = np.linspace(500,1000,11)
-    Ep = 800
-    dS = import_PSTAR_data("Al",Ep)
-    print(f"dS : {dS}")
+    # k,rho,cp,eps = import_mat_data("SS316L")
+    # print(k,rho,cp)
+    # print("epsy",eps)
+    # # Ep = np.linspace(500,1000,11)
+    # Ep = 800
+    # dS = import_PSTAR_data("Al",Ep)
+    # print(f"dS : {dS}")
+    
+    el = 'Ni'
+    k,rho,cp,eps = import_mat_data(el)
+    Lz = 7
+    
+    calculate_stoppingpower(el,800,Lz,rho,True)
