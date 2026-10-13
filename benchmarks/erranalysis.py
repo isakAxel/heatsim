@@ -9,7 +9,7 @@ import pandas as pd
 from Sim.heatsim2d import TrapBasic,modPRSolver,F1,F2
 from Sim.heatsim2dMU import (PRCoolingCycle, PRCoolingCycle2, TrapCoolingCycle,
                              HeunCoolingCyclev2, BoundaryConditionNeumann,
-                             F2_xz, plot_field,sparse)
+                             F2_xz, plot_field,sparse,numba)
 from Sim.operators import DiscLaplacian,DiscLaplacian1D
 from datetime import datetime
 from Sim.utils.profiling import run_timed
@@ -77,17 +77,19 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
     Lz,fq = BoundaryConditionNeumann(Lz,q0=1,qend=0)
     
     fq = sparse.kron(fq, np.ones((Mx,1)), format = "csr")
-    Lx = sparse.kron(Iz, Lx, format="csr")
-    Lz = sparse.kron(Lz, Ix, format="csr")
-    L_2D = (Lx + Lz).tocsr()
-    ## Continue here
+    # Lx = sparse.kron(Iz, Lx, format="csr")
+    # Lz = sparse.kron(Lz, Ix, format="csr")
+
+    # Continue here
     ## 
 
     os.chdir(r"C:\Users\axelisaksson\Desktop\heatsim")
     
    
     v0 = F2_xz(cfg) * cfg.beam.t_pulse 
-    results = {"N": np.array(Ns), "k_pause" : np.zeros(len(Ns)), f"errs" : np.zeros(len(Ns)),"time" : np.zeros(len(Ns)),"err_Linf" : np.zeros(len(Ns))}
+    nrun = len(Ns)
+    results = {"N": np.array(Ns), "k_pause" : np.zeros(nrun), f"errs" : np.zeros(nrun),"time" : np.zeros(nrun),
+               "err_Linf" : np.zeros(nrun) ,"nThreads" : np.zeros_like(Ns) }
 
     if refsol is None:
         print(f"Running baseline:M = {cfg.space.Mx}, N = {N_base}")
@@ -100,11 +102,12 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
     for i, N in enumerate(Ns):
         cfg.time.N = N       # mutate TemporalParams, k_pulse/k_pause follow
         print(f"N={N}  hx={cfg.space.hx}, hz={cfg.space.hz}  k_pause={cfg.time.k_pause:.4e}")
-        u_A, dt = run_timed(schemeA,v0,Lx,Lz,fq,cfg)
+        u_A, dt, nthreads = run_timed(schemeA,v0,Lx,Lz,fq,cfg)
         
         
         results["time"][i] = dt
         results["k_pause"][i] = cfg.time.k_pause
+        results["nThreads"][i] = nthreads
         if np.isinf(u_A).any() or np.isnan(u_A).any():
             results[f"errs"][i] = "INF"
         else:
@@ -151,14 +154,14 @@ def read_results(simname, datetime = None ,root ="./benchmarks/data") -> pd.Data
     return pd.read_csv(readstr, sep = r"\s+", engine = "python")
 
 
-def PlotEfficiency(M):
+def PlotEfficiency(M,show = 0):
 
-    simnames = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}"]
+    simnames = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}",f"2DMU_PR_DSPAR_NsVsErrs_M{M}"]
 
     res = [read_results(sim) for sim in simnames]
-    methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"]
-
-    vis.plot_efficiency(res,methods,"Logarithmic error over computation time", M,f"eff_PR_BS_DS_TRAP_M{M}")
+    methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule","PR-DS with Para (1 Thread)"]
+    
+    vis.plot_efficiency(res,methods,"Logarithmic error over computation time", M,f"eff_PR_BS_DS_TRAP_M{M}",show = show)
 
 def PlotMain(M):
 
@@ -215,7 +218,7 @@ def CalcTime():
         sum += np.sum(res["time"])
 
     print(f"Total time for last sim was {sum/60} min")
-def BenchmarkMain():
+def BenchmarkMain(nthreads = None):
 
     Ns = np.array([100 * i for i in range(1,16) ])
     M = 512
@@ -223,30 +226,41 @@ def BenchmarkMain():
     print(f"Trial for M = {M} and Ns = {Ns}")
     print("------Pause time is:", cfg.time.t_pause, "-----\n")
 
+    if nthreads: 
+        print(f"Nubmer of threads: {nthreads}")
+        numba.set_num_threads(nthreads)
     refsol = "MU_refsol_M512_N100000"
+   
+    
     print("Using refsol : ", refsol)
+    # sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    # resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
+    # resdf = save_results(sim_test_name,resultsDS)
+    # print(f"Saved results to {sim_test_name}\n",
+    # "-------- Results : ----------\n",resdf)
 
-    sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
-    resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
-    resdf = save_results(sim_test_name,resultsDS)
-    print(f"Saved results to {sim_test_name}\n",
-    "-------- Results : ----------\n",resdf)
+
+    # print("refsol= ",refsol)
+    # sim_test_name = f"2DMU_PR_DS_NsVsErrs_M{M}"
+    # resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split", PRCoolingCycle2), cfg,refsol = refsol)
+    # resdf = save_results(sim_test_name,resultsDS)
+    # print(f"Saved results to {sim_test_name}\n",
+    #     "-------- Results : ----------\n",resdf)
 
 
+    # print("refsol= ",refsol)
+    # sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
+    # results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
+    # resdf = save_results(sim_test_name, results)
+    # print(f"Saved results to {sim_test_name}\n",
+    #     "-------- Results : ----------\n",resdf)
     print("refsol= ",refsol)
-    sim_test_name = f"2DMU_PR_DS_NsVsErrs_M{M}"
-    resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split", PRCoolingCycle2), cfg,refsol = refsol)
+    sim_test_name = f"2DMU_PR_DSPAR_NsVsErrs_M{M}"
+    resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split with paralellization", PRCoolingCycle2), cfg,refsol = refsol)
     resdf = save_results(sim_test_name,resultsDS)
     print(f"Saved results to {sim_test_name}\n",
         "-------- Results : ----------\n",resdf)
 
-
-    print("refsol= ",refsol)
-    sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
-    results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
-    resdf = save_results(sim_test_name, results)
-    print(f"Saved results to {sim_test_name}\n",
-        "-------- Results : ----------\n",resdf)
     
     # Ns = [80_000, 100_000, 120_000, 140_000, 160_000, 180_000, 200_000, 220_000]
 
@@ -259,12 +273,12 @@ def BenchmarkMain():
 
 if __name__ == "__main__":   
 
-    Ns = np.array([100 * i for i in range(1,11) ])
+
     M = 512
-    # PlotEfficiency(M)
-    PlotMain(M)
-    CalcTime()
-    # BenchmarkMain()
+    PlotEfficiency(M, show = 1)
+    # PlotMain(M)
+    # CalcTime()
+    # BenchmarkMain(nthreads=1)
     
 
 

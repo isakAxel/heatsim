@@ -6,9 +6,12 @@ from scipy.sparse.linalg import spsolve, splu,cg, gmres
 from Sim.config import build_sim
 from Sim.operators import DiscLaplacian1D, F1, dF1
 from Sim.utils.profiling import timer,cpuprf
-
+from Sim.solvers import thomasMethod
 # Numerically stable sigmoid
 expit = special.expit
+
+import os, numba
+
 
 
 # ----------------------------------------------------------------------
@@ -110,6 +113,20 @@ def IkF(v, k, fq, cfg):
 def IkFLz(v, k, Lz, fq, cfg):
     """
     Newton approximation of u in  (I - k/2 Lz - k/2 F1_q) u = v
+
+
+    Parameters: 
+        v (array (M+2)):
+            the input array for temperature distribution v
+        k (float) :
+            Time-step size k
+        Lz (sparray (M(M+2) x M(M+2)):
+            (Block-) Tridiagonal Laplacian matrix
+        fq (sparray (M+2 * M,)) : 
+            Boundary condition reaction term sparse vector
+        cfg(SimulationSetup) : 
+            Configuration object
+
     """
     size = Lz.shape[0]
     idx = fq.nonzero()[0]
@@ -119,7 +136,7 @@ def IkFLz(v, k, Lz, fq, cfg):
     # debugging
     hx, hz = cfg.space.hx, cfg.space.hz
     w = np.sqrt(hx * hz)
-
+    temp = 1
     for i in range(cfg.time.maxit):
         Fu = F1(u, cfg, fq).data
         dFu = dF1(u, cfg, fq).data
@@ -129,6 +146,11 @@ def IkFLz(v, k, Lz, fq, cfg):
 
         Dia = sparse.coo_array((dFu, (idx, idx)), shape=(size, size)).tocsr()
         jacobian = A - k/2 * Dia
+        
+        # if temp:
+        #     np.savetxt("tempFu.log",Fu)        
+        #     np.savetxt("tempdFu.log",dFu)
+        #     temp  = 0
 
         du,info = cg(jacobian.tocsc(),fu,rtol = 1e-8)
         if info > 0 :
@@ -141,6 +163,40 @@ def IkFLz(v, k, Lz, fq, cfg):
             break
     if (i > 99):
         print("Iterations:", i)
+    return u
+
+def IkFLz_fast(v, k, Lhz, A1, fq, cfg):
+
+    # A1 = (I - k/2 Lhz) as sparse CSR, built once outside the time loop
+    
+    Mz2, Mx = cfg.space.Mz + 2, cfg.space.Mx
+    idx = fq.nonzero()[0]
+    w = np.sqrt(cfg.space.hx * cfg.space.hz)
+
+    lower = -k/2 * Lhz.diagonal(-1)
+    upper = -k/2 * Lhz.diagonal(1)
+    base  = 1.0 - k/2 * Lhz.diagonal(0)
+
+    u = v.copy()
+    for i in range(cfg.time.maxit):
+        Fu  = F1(u, cfg, fq).data
+        dFu = dF1(u, cfg, fq).data
+
+        r = (A1 @ u.reshape(Mz2, Mx)).reshape(-1) - v
+        r[idx] -= k/2 * Fu
+        R = np.asfortranarray(r.reshape(Mz2, Mx))
+
+        D = np.tile(base[:, None], (1, Mx))
+        D.reshape(-1)[idx] -= k/2 * dFu      # boundary rows only
+        D = np.asfortranarray(D)
+
+        du = thomasMethod(lower, D, upper, R).reshape(-1)
+        u -= du
+
+        if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
+            break
+        if (i > 99):
+            print("Iterations:", i)
     return u
 
 
@@ -156,29 +212,37 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     """
     N = cfg.time.N
     k = cfg.time.k_pause
-    Lh = (Lx + Lz).tocsr()
-    M_l = Lh.shape[0]
+    Mx,Mz = cfg.space.Mx, cfg.space.Mz
+    
+    Ix = sparse.eye_array(Mx, Mx)
+    Iz = sparse.eye_array(Mz + 2, Mz + 2)
+    L = sparse.kron(Iz,Lx, format  = "csr") + sparse.kron(Lz,Ix,format = "csr")
+    I = sparse.kron(Ix,Iz,format = "csr")
+    # I = sparse.eye_array(M_l, M_l, format="csr")
+    M_l = L.shape[0]
 
     wn = v0.copy()
-    I = sparse.eye_array(M_l, M_l, format="csr")
+    
     idx = fq.nonzero()[0]
     if history:
         w = np.zeros((M_l,N+1))
         w[:,0] = v0
 
     print("------ Cooling Cycle Boundary Term Split --------")
-    lu = splu((I - k/2 * Lh).tocsc(), permc_spec="NATURAL")
+    ## TODO: Change to paralell solver
+    lu = splu((I - k/2 * L).tocsc(), permc_spec="NATURAL")
+    
     for n in range(N):
         wn[idx] += k/2 * F1(wn, cfg, fq).data           # (I + k/2 F) w
-        v = (I + k/2 * Lh) @ lu.solve(wn)
+        v = (I + k/2 * L) @ solver.solve()
         wn = IkF(v, k, fq, cfg)
         if history:
             w[:,n+1] = wn
     return w if history else wn
 
-
+fast = 1
 @timer()
-def PRCoolingCycle2(v0, Lx, Lz, fq, cfg,history = 0):
+def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     """
     Dimensional splitting  Lx  /  (Lz + F1_q):
 
@@ -186,8 +250,12 @@ def PRCoolingCycle2(v0, Lx, Lz, fq, cfg,history = 0):
     """
     N = cfg.time.N
     k = cfg.time.k_pause
-    M_l = Lz.shape[0]
-
+    Mx,Mz = cfg.space.Mx, cfg.space.Mz
+        
+    
+    Lx = sparse.kron(sparse.eye_array(Mz+2, Mz+2),Lx, format  = "csr") 
+    Lzb = sparse.kron(Lzs,sparse.eye_array(Mx, Mx),format = "csr")
+    M_l = Lx.shape[0]
     wn = v0.copy()
     I = sparse.eye_array(M_l, M_l, format="csr")
     idx = fq.nonzero()[0]
@@ -201,12 +269,19 @@ def PRCoolingCycle2(v0, Lx, Lz, fq, cfg,history = 0):
         
         # (I + k/2 Lz + k/2 F) w_n  -- both terms evaluated on w_n
         
-        wnew = wn + k/2 * (Lz @ wn)
+        wnew = wn + k/2 * (Lzb @ wn)
         wnew[idx] += k/2 * F1(wn, cfg, fq).data
         # (I + k/2 Lx)(I - k/2 Lx)^-1
         v = (I + k/2 * Lx) @ lux.solve(wnew)
         # (I - k/2 Lz - k/2 F)^-1
-        wn = IkFLz(v, k, Lz, fq, cfg)
+
+        if fast == 1:
+            # if n == 0:
+            #     print("Using Thomas!")
+            
+            wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+        else:
+            wn = IkFLz(v, k, Lzb, fq, cfg)
         if history:
             w[:, n + 1] = wn
     return w if history else wn
@@ -399,36 +474,38 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 256
-    cfg = build_sim(N=100, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 600
+    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
-    # print("---------- Parameters for Simulation -------------\n",
-    #       f"Simulation Material : {cfg.target.material} \n",
-    #       f"Pulse period : {1/cfg.beam.p_freq} \n",
-    #       f"Pulse frequency : {cfg.beam.p_freq:.2f} \n",
-    #       f"Pulse length : {cfg.beam.t_pulse} \n",
-    #       f"Energy : {cfg.beam.Ep} \n",
-    #       f"Time without pulse (Pause length): {cfg.time.t_pause}\n",
-    #       f"Density rho : {cfg.target.rho}\n",
-    #       f"Specific Heat Cp: {cfg.target.C_p}\n",
-    #       f"Stopping power dEdz: {cfg.target.dEdz:.2E}\n",
-    #       f"Peak current Ib : {cfg.beam.Ib}\n",
-    #       f"Sigmax : {cfg.beam.sigmax} \n",
-    #       f"Sigmay : {cfg.beam.sigmay} \n",
-    #       f"T0 : {cfg.T0}\n")
+    numba.set_num_threads(1)
+
+    print("---------- Parameters for Simulation -------------\n",
+          f"Simulation Material : {cfg.target.material} \n",
+          f"Pulse period : {1/cfg.beam.p_freq} \n",
+          f"Pulse frequency : {cfg.beam.p_freq:.2f} \n",
+          f"Pulse length : {cfg.beam.t_pulse} \n",
+          f"Energy : {cfg.beam.Ep} \n",
+          f"Time without pulse (Pause length): {cfg.time.t_pause}\n",
+          f"Density rho : {cfg.target.rho}\n",
+          f"Specific Heat Cp: {cfg.target.C_p}\n",
+          f"Stopping power dEdz: {cfg.target.dEdz:.2E}\n",
+          f"Peak current Ib : {cfg.beam.Ib}\n",
+          f"Sigmax : {cfg.beam.sigmax} \n",
+          f"Sigmay : {cfg.beam.sigmay} \n",
+          f"T0 : {cfg.T0}\n")
 
     # --- Operators ---------------------------------------------------
-    Ix = sparse.eye_array(Mx, Mx)
-    Iz = sparse.eye_array(Mz + 2, Mz + 2)
+    Lx_s = DiscLaplacian1D(cfg, axis="x")
+    Lz_s = DiscLaplacian1D(cfg, axis="z")
+    Lz_s, fq1d = BoundaryConditionNeumann(Lz_s, q0=1, qend=0)
 
-    Lhx = DiscLaplacian1D(cfg, axis="x")
-    Lhz = DiscLaplacian1D(cfg, axis="z")
-    Lhz, fq1d = BoundaryConditionNeumann(Lhz, q0=1, qend=0)
-
-    Lx = sparse.kron(Iz, Lhx, format="csr")
-    Lz = sparse.kron(Lhz, Ix, format="csr")
+    # print("L_z matrix :"  )
+    # np.savetxt("testmatrixLz",Lz_s.toarray(),fmt = "%.2f")
+    # exit()
+    # Lx = sparse.kron(Iz, Lhx, format="csr")
+    # Lz = sparse.kron(Lhz, Ix, format="csr")
     fq = sparse.kron(fq1d, np.ones((Mx, 1)), format="csr")
 
     # --- Initial value after heating pulse ----------------------------
@@ -437,9 +514,21 @@ if __name__ == "__main__":
     # if plot_option:
     #     plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
 
+
     # --- Solve --------------------------------------------------------
-    u = PRCoolingCycle2(v0, Lx, Lz, fq, cfg)
-    u2 = PRCoolingCycle(v0,Lx,Lz,fq,cfg)
+    print("Numba uses:", numba.get_num_threads())
+    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
+    numba.set_num_threads(2)
+    print("Numba uses:", numba.get_num_threads())
+    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
+    numba.set_num_threads(4)
+    print("Numba uses:", numba.get_num_threads())
+    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
+        
+    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg)
+    # fast = 0
+    # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
+    
     # err2Norm = linalg.norm(u2 - u, 2) * h
     # print(f" error L2-norm : {err2Norm}")
 
@@ -453,9 +542,9 @@ if __name__ == "__main__":
 
 
     # if plot_option:
-    #     plot_field(cfg, u2,
+    #     plot_field(cfg, u,
     #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
     #                "Peaceman Rachford",
     #                mark_max=True)
 
-    # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Boundary Split'))
+    # plot_compare(cfg,u,u3,labels = ('Dimensional Split', 'Boundary Split'))

@@ -7,7 +7,7 @@ import threadpoolctl as tpc
 import psutil
 import time
 import functools
-
+import numba
 def timer(metric="perf_counter"):
     """
     Decorator that times the execution of passed function, the timing can be done with different metrics, which are listed below
@@ -67,13 +67,28 @@ def cpuprf(func):
         return sol
     return inner
 
+def _safe_num_threads():
+    """Return the active Numba thread count as an int, or 0 in case of exception"""
+    try:
+        n = numba.get_num_threads()
+    except Exception:
+        return 0
+    return int(n)
+
 def run_timed(func, *args, name=None, **kwargs):
     """Call a @timer-decorated solver, return (result, seconds)."""
+    
     t0 = time.perf_counter()
     result = func(*args, timeit=False, **kwargs)     # decorator stays silent
     dt = time.perf_counter() - t0
+    
+    nthreads = _safe_num_threads()
+    if nthreads > 1:
+        print(f"Number of threads : {nthreads}")
     print(f"[{name or func.__name__}] Execution time: {dt:.4f} seconds")
-    return result, dt
+    return result, dt,nthreads
+
+
 
 ### Sandbox testing
 
