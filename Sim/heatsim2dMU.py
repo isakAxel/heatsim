@@ -483,8 +483,8 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 1024
-    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 256
+    cfg = build_sim(N=300, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -554,10 +554,10 @@ if __name__ == "__main__":
     # print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
 
 
-    # if plot_option:
-    #     plot_field(cfg, u2,
-    #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
-    #                "Peaceman Rachford BS with pardiso",
-    #                mark_max=True)
+    if plot_option:
+        plot_field(cfg, u,
+                   f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
+                   "Peaceman Rachford BS with pardiso",
+                   mark_max=True)
 
     # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Boundary Split'))
