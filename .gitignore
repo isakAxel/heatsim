@@ -1,22 +1,26 @@
-# data folder
-*/data
-data
-*__pycache__
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
 
 # Venv and Env files
 .venv
 .env
+.venv/
 
+# module build output
+*.egg-info/
+build/
+dist/
 
-# notes and stuff
-*.txt
-
-# sandbox notebook with tools for development
+# sandbox notebook with tools for development and notes
 sandbox*
+notes/
 
 # log files
-.log
-*log
+*.log
 
 # setup files 
 *.egg-info/
@@ -25,3 +29,13 @@ dist/
 
 # .prof files for profiling call stack
 *prof
+
+# data folder
+data/
+benchmarks/data/imgs/
+
+# OS Files
+.vscode/
+.idea/
+.DS_Store
+

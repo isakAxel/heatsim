@@ -12,7 +12,9 @@ expit = special.expit
 
 import os, numba
 
-
+os.environ["MKL_NUM_THREADS"] = "4" 
+os.environ["OMP_NUM_THREADS"]  = "1"     
+from pypardiso import PyPardisoSolver
 
 # ----------------------------------------------------------------------
 # Boundary conditions
@@ -230,14 +232,21 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
 
     print("------ Cooling Cycle Boundary Term Split --------")
     ## TODO: Change to paralell solver
-    lu = splu((I - k/2 * L).tocsc(), permc_spec="NATURAL")
+    # PARALELL
+    
+    op = I - k/2 * L 
+    solver = PyPardisoSolver(mtype = 11)
+    solver.factorize(op)
     
     for n in range(N):
         wn[idx] += k/2 * F1(wn, cfg, fq).data           # (I + k/2 F) w
-        v = (I + k/2 * L) @ solver.solve()
+        v = (I + k/2 * L) @ solver.solve(op,wn)
+        # v = (I + k/2 * L) @ LinSolve(opLU,wn)
         wn = IkF(v, k, fq, cfg)
         if history:
             w[:,n+1] = wn
+    solver.free_memory()
+    del solver
     return w if history else wn
 
 fast = 1
@@ -474,12 +483,12 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 600
+    M = 1024
     cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
-    numba.set_num_threads(1)
+    numba.set_num_threads(2)
 
     print("---------- Parameters for Simulation -------------\n",
           f"Simulation Material : {cfg.target.material} \n",
@@ -502,8 +511,7 @@ if __name__ == "__main__":
     Lz_s, fq1d = BoundaryConditionNeumann(Lz_s, q0=1, qend=0)
 
     # print("L_z matrix :"  )
-    # np.savetxt("testmatrixLz",Lz_s.toarray(),fmt = "%.2f")
-    # exit()
+   
     # Lx = sparse.kron(Iz, Lhx, format="csr")
     # Lz = sparse.kron(Lhz, Ix, format="csr")
     fq = sparse.kron(fq1d, np.ones((Mx, 1)), format="csr")
@@ -516,14 +524,19 @@ if __name__ == "__main__":
 
 
     # --- Solve --------------------------------------------------------
-    print("Numba uses:", numba.get_num_threads())
+    #
+    # print("Numba uses:", numba.get_num_threads())
+    # print("Using 1 Thread")
+    
     u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-    numba.set_num_threads(2)
-    print("Numba uses:", numba.get_num_threads())
-    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-    numba.set_num_threads(4)
-    print("Numba uses:", numba.get_num_threads())
-    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
+    
+    # numba.set_num_threads(2)
+    # print("Using 4 threads")
+    # os.environ["MKL_NUM_THREADS"] = "4"
+    # u2 = PRCoolingCycle(v0, Lx_s, Lz_s, fq, cfg)
+    # numba.set_num_threads(4)
+    # print("Numba uses:", numba.get_num_threads())
+    # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
         
     # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg)
     # fast = 0
@@ -542,9 +555,9 @@ if __name__ == "__main__":
 
 
     # if plot_option:
-    #     plot_field(cfg, u,
+    #     plot_field(cfg, u2,
     #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
-    #                "Peaceman Rachford",
+    #                "Peaceman Rachford BS with pardiso",
     #                mark_max=True)
 
-    # plot_compare(cfg,u,u3,labels = ('Dimensional Split', 'Boundary Split'))
+    # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Boundary Split'))

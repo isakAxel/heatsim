@@ -53,7 +53,7 @@ def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",yli
     fig.savefig(fname)
 
 
-def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency" ):
+def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency", root = f"./benchmarks/data/error_plots/EFFICIENCY"):
     
     """
     Plots erros over time of the algorithm from a list of results dataframes res. The produced plot is saved in the root directory.
@@ -86,5 +86,5 @@ def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency" 
         
         ax.legend()
         
-
-    fig.savefig(fname)
+    fullpath = f"{root}/{fname}"
+    fig.savefig(fullpath)

@@ -16,6 +16,8 @@ from Sim.utils.profiling import run_timed
 import Sim.visual as vis
 import glob
 
+
+### Artifact function
 def run_convergence_sweep(Ns,methodA : tuple[str,Callable], methodB : tuple[str,Callable], cfg : SimulationSetup ):
     """Run PR vs Trapezoidal for each N, return array of L2 errors."""
 
@@ -57,7 +59,7 @@ def CreateBaseline(v0,Lx,Lz,fq,cfg,outfile, method = TrapCoolingCycle):
     path = f"./benchmarks/data/{outfile}"
     res = pd.Series(u_baseline)
     ### Change directory to save
-    res.to_csv(path,sep = " ", index = False, float_format= "%.17e")         ##TOO LOW resolution for the baseline wtf
+    res.to_csv(path,sep = " ", index = False, float_format= "%.17e")    
     return u_baseline
 
 def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSetup,refsol = None,N_base = 0,NewBase = None):
@@ -154,14 +156,15 @@ def read_results(simname, datetime = None ,root ="./benchmarks/data") -> pd.Data
     return pd.read_csv(readstr, sep = r"\s+", engine = "python")
 
 
-def PlotEfficiency(M,show = 0):
+def PlotEfficiency(M):
 
-    simnames = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}",f"2DMU_PR_DSPAR_NsVsErrs_M{M}"]
+    simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
+    # simnames = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}",f"2DMU_PR_DSPAR_NsVsErrs_M{M}"]
 
     res = [read_results(sim) for sim in simnames]
-    methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule","PR-DS with Para (1 Thread)"]
-    
-    vis.plot_efficiency(res,methods,"Logarithmic error over computation time", M,f"eff_PR_BS_DS_TRAP_M{M}",show = show)
+    # methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule","PR-DS with Para (1 Thread)"]
+    methods = ["1 Thread" , "2 Threads", "4 Threads", "8 Threads"]    
+    vis.plot_efficiency(res,methods,"Logarithmic error over computation time for DS-Method", M,f"eff_PARA_NTHREADS_M{M}")
 
 def PlotMain(M):
 
@@ -225,14 +228,22 @@ def BenchmarkMain(nthreads = None):
     cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
     print(f"Trial for M = {M} and Ns = {Ns}")
     print("------Pause time is:", cfg.time.t_pause, "-----\n")
-
+    
+    refsol = "MU_refsol_M512_N100000"
     if nthreads: 
         print(f"Nubmer of threads: {nthreads}")
         numba.set_num_threads(nthreads)
-    refsol = "MU_refsol_M512_N100000"
+        print("refsol= ",refsol)
+            
+        sim_test_name = f"2DMU_PR_DSPAR{nthreads}_NsVsErrs_M{M}"
+        resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split with paralellization", PRCoolingCycle2), cfg,refsol = refsol)
+        resdf = save_results(sim_test_name,resultsDS)
+        print(f"Saved results to {sim_test_name}\n",
+            "-------- Results : ----------\n",resdf)
+    
    
     
-    print("Using refsol : ", refsol)
+    # print("Using refsol : ", refsol)
     # sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
     # resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
     # resdf = save_results(sim_test_name,resultsDS)
@@ -254,12 +265,7 @@ def BenchmarkMain(nthreads = None):
     # resdf = save_results(sim_test_name, results)
     # print(f"Saved results to {sim_test_name}\n",
     #     "-------- Results : ----------\n",resdf)
-    print("refsol= ",refsol)
-    sim_test_name = f"2DMU_PR_DSPAR_NsVsErrs_M{M}"
-    resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split with paralellization", PRCoolingCycle2), cfg,refsol = refsol)
-    resdf = save_results(sim_test_name,resultsDS)
-    print(f"Saved results to {sim_test_name}\n",
-        "-------- Results : ----------\n",resdf)
+   
 
     
     # Ns = [80_000, 100_000, 120_000, 140_000, 160_000, 180_000, 200_000, 220_000]
@@ -275,11 +281,26 @@ if __name__ == "__main__":
 
 
     M = 512
-    PlotEfficiency(M, show = 1)
+    # PlotEfficiency(M)
     # PlotMain(M)
     # CalcTime()
-    # BenchmarkMain(nthreads=1)
+    # nthreads = 1
+    # BenchmarkMain(nthreads)
+    # nthreads = 2
+    # BenchmarkMain(nthreads)
+    # nthreads = 4
+    # BenchmarkMain(nthreads)
+    # nthreads = 8
+    # BenchmarkMain(nthreads)
+
+    simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
+
+    PlotEfficiency(M)
     
+    
+    
+    # resdf = read_results(f"2DMU_PR_BS_NsVsErrs_M{M}",f"20261008_205518", root = "./data")
+    # print("new results\n",resdf)
 
 
     

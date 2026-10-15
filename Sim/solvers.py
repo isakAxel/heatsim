@@ -7,7 +7,7 @@ import scipy.sparse as sparse
 
 """
 
-
+### Algo 4.7 for Toeplitz ? 
 ### Use this so can use Algo 4.3.6
 def SymmLZ(Lz,Mx):
     """
@@ -45,4 +45,24 @@ def thomasMethod(lower, diag, upper, rhs):
     return x
 
 
-# def
+# This solver is for dense matrices need to revamp this
+@njit(cache=True)
+def LinSolve(L,U,rhs):
+    
+    n,m = L.shape
+    b = rhs
+    x = np.empty(n)
+
+    for j in range(n):
+        b[j] = b[j] / L[j,j]
+        b[j+1:n] = b[j+1:n] - b[j] * L[j+1:n,j]
+
+    b[n] = b[n] / L[n,n]
+
+    for j in range(n-1,-1,2):
+        b[j] = b[j]/ U[j,j]
+        b[0:j] = b[0:j] - b[j] * U[0:j,j]
+    b[0] = b[0] / U[0,0]
+
+    return x
+    
