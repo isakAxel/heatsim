@@ -159,12 +159,16 @@ def read_results(simname, datetime = None ,root ="./benchmarks/data") -> pd.Data
 def PlotEfficiency(M):
 
     simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
-    # simnames = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}",f"2DMU_PR_DSPAR_NsVsErrs_M{M}"]
+    
+    simnames2 = [f"2DMU_PR_BS_NsVsErrs_M{M}", f"2DMU_PR_DS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}"]
+    simnames = simnames + simnames2
 
     res = [read_results(sim) for sim in simnames]
-    # methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule","PR-DS with Para (1 Thread)"]
-    methods = ["1 Thread" , "2 Threads", "4 Threads", "8 Threads"]    
-    vis.plot_efficiency(res,methods,"Logarithmic error over computation time for DS-Method", M,f"eff_PARA_NTHREADS_M{M}")
+    methods = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"]
+    # Para methods
+    paramethods = ["1 Thread" , "2 Threads", "4 Threads", "8 Threads"]    
+    methods = paramethods + methods
+    vis.plot_efficiency(res,methods,"Logarithmic error over computation time for DS-Method", M,f"eff_PARA_ALLMETHODS_M{M}")
 
 def PlotMain(M):
 
@@ -277,6 +281,28 @@ def BenchmarkMain(nthreads = None):
     # print(f"Saved results to {sim_test_name}\n",
     # "-------- Results : ----------\n",resdf)
 
+def ErrTable(M):
+
+    methods = ["PR_DS", "PR_BS"]
+    ref = read_results(f"2DMU_TRAP_NsVsErrs_M{M}").set_index("k_pause")[["errs", "err_Linf"]]
+
+    
+    pieces = {}
+
+    for met in methods:
+        simname = f"2DMU_{met}_NsVsErrs_M{M}"
+        res = read_results(simname).set_index("k_pause")[["errs","err_Linf"]] 
+
+        diff = np.abs(res - ref)
+        for col in ["errs","err_Linf"]:
+            pieces[(met,col)] = diff[col]
+
+    out = pd.DataFrame(pieces)
+    out.columns.names = ["method","metric"]
+     
+    return out
+
+
 if __name__ == "__main__":   
 
 
@@ -293,11 +319,12 @@ if __name__ == "__main__":
     # nthreads = 8
     # BenchmarkMain(nthreads)
 
-    simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
+    # simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
 
     PlotEfficiency(M)
     
-    
+    # err_dataFrame = ErrTable(M)
+    # print(err_dataFrame)
     
     # resdf = read_results(f"2DMU_PR_BS_NsVsErrs_M{M}",f"20261008_205518", root = "./data")
     # print("new results\n",resdf)

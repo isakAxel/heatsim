@@ -1,3 +1,7 @@
+import os, numba
+os.environ["MKL_NUM_THREADS"] = "4" 
+os.environ["OMP_NUM_THREADS"]  = "1"     
+from pypardiso import PyPardisoSolver
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse, linalg, special
@@ -10,11 +14,8 @@ from Sim.solvers import thomasMethod
 # Numerically stable sigmoid
 expit = special.expit
 
-import os, numba
 
-os.environ["MKL_NUM_THREADS"] = "4" 
-os.environ["OMP_NUM_THREADS"]  = "1"     
-from pypardiso import PyPardisoSolver
+
 
 # ----------------------------------------------------------------------
 # Boundary conditions
@@ -206,6 +207,7 @@ def IkFLz_fast(v, k, Lhz, A1, fq, cfg):
 # Cooling cycles
 # ----------------------------------------------------------------------
 @timer()
+@cpuprf
 def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     """
     Splitting  Lh (full Laplacian)  /  F1_q (boundary cooling):
@@ -251,6 +253,7 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
 
 fast = 1
 @timer()
+@cpuprf
 def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     """
     Dimensional splitting  Lx  /  (Lz + F1_q):
@@ -264,6 +267,9 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     
     Lx = sparse.kron(sparse.eye_array(Mz+2, Mz+2),Lx, format  = "csr") 
     Lzb = sparse.kron(Lzs,sparse.eye_array(Mx, Mx),format = "csr")
+
+    np.savetxt("matLX.log",Lx.toarray(),fmt="%.6f")
+    np.savetxt("matLZ.log",Lzb.toarray(),fmt="%.6f")
     M_l = Lx.shape[0]
     wn = v0.copy()
     I = sparse.eye_array(M_l, M_l, format="csr")
@@ -483,12 +489,12 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 256
-    cfg = build_sim(N=300, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 4
+    cfg = build_sim(N=50, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
-    numba.set_num_threads(2)
+    numba.set_num_threads(4)
 
     print("---------- Parameters for Simulation -------------\n",
           f"Simulation Material : {cfg.target.material} \n",
@@ -528,8 +534,8 @@ if __name__ == "__main__":
     # print("Numba uses:", numba.get_num_threads())
     # print("Using 1 Thread")
     
-    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-    
+    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg,cpuprf = True)
+    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg, cpuprf = True)
     # numba.set_num_threads(2)
     # print("Using 4 threads")
     # os.environ["MKL_NUM_THREADS"] = "4"
@@ -538,7 +544,6 @@ if __name__ == "__main__":
     # print("Numba uses:", numba.get_num_threads())
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
         
-    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg)
     # fast = 0
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     

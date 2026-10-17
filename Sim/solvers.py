@@ -32,6 +32,7 @@ def thomasMethod(lower, diag, upper, rhs):
     for j in prange(m):
         cp = np.empty(n - 1)
         dp = np.empty(n)
+        ## TODO if change setting the updated diag value will be a fixed index, only changing factor of D
         cp[0] = upper[0] / diag[0, j]
         dp[0] = rhs[0, j] / diag[0, j]
         for i in range(1, n):
