@@ -1,7 +1,7 @@
 import numpy as np
 from numba import njit, prange
 import scipy.sparse as sparse
-
+import jax.numpy as jnp 
 """
     Module that involves "own-made" solvers, started to compare specific algorithms for the laplacian structure
 
@@ -42,6 +42,34 @@ def thomasMethod(lower, diag, upper, rhs):
         x[n-1, j] = dp[n-1]
         for i in range(n - 2, -1, -1):
             x[i, j] = dp[i] - cp[i] * x[i+1, j]
+    return x
+
+### This is quicker do to removal of a bunch of reshaping overhead,
+### Try to implement JAX to get even more efficient np.array handling
+@njit(parallel=True,cache=True)
+def thomasMethodJAX(lower, diag, upper, rhs, Mx,Mz):
+    """
+        Thomas method that solves for rhs
+    Params:
+        lower (Mz,1)
+        diag (Mz*Mx,1)
+        upper (Mx,1)
+    """
+    x = np.empty(Mx*Mz)
+
+    for j in prange(Mx):
+        cp = np.empty(Mz - 1)
+        dp = np.empty(Mz)
+        cp[0] = upper[0] / diag[0 + j*Mz]
+        dp[0] = rhs[ 0 + j*Mz] / diag[0 + j*Mz]
+        for i in range(1, Mz):
+            denom = diag[i + j*Mz] - lower[i-1] * cp[i-1]
+            if i < Mz - 1:
+                cp[i] = upper[i] / denom
+            dp[i] = (rhs[i+ j*Mz] - lower[i-1] * dp[i-1]) / denom
+        x[Mz-1 + j*Mz] = dp[Mz-1]
+        for i in range(Mz - 2, -1, -1):
+            x[i + j*Mz] = dp[i] - cp[i] * x[i+1 + j*Mz]
     return x
 
 

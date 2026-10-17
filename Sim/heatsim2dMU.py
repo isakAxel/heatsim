@@ -1,3 +1,7 @@
+import os, numba
+os.environ["MKL_NUM_THREADS"] = "4" 
+os.environ["OMP_NUM_THREADS"]  = "1"     
+from pypardiso import PyPardisoSolver
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse, linalg, special
@@ -6,15 +10,12 @@ from scipy.sparse.linalg import spsolve, splu,cg, gmres
 from Sim.config import build_sim
 from Sim.operators import DiscLaplacian1D, F1, dF1
 from Sim.utils.profiling import timer,cpuprf
-from Sim.solvers import thomasMethod
+from Sim.solvers import thomasMethod,thomasMethodJAX
 # Numerically stable sigmoid
 expit = special.expit
 
-import os, numba
 
-os.environ["MKL_NUM_THREADS"] = "4" 
-os.environ["OMP_NUM_THREADS"]  = "1"     
-from pypardiso import PyPardisoSolver
+
 
 # ----------------------------------------------------------------------
 # Boundary conditions
@@ -82,7 +83,7 @@ def F2_xz(cfg, r0=3.4):
 
     xs = np.linspace(hx, hx * Mx, Mx)          # interior points in x
     zs = np.linspace(0, Lz, Mz + 2)            # includes both z boundaries
-    x, z = np.meshgrid(xs, zs)
+    x,z= np.meshgrid(xs,zs, indexing ="ij")  # Change reference definition
 
     cx = Lx / 2
     braggc = P_bragg(z, dEdz, r0)
@@ -130,6 +131,7 @@ def IkFLz(v, k, Lz, fq, cfg):
             Configuration object
 
     """
+    ### TODO: change direction
     size = Lz.shape[0]
     idx = fq.nonzero()[0]
     I = sparse.eye_array(size, size, format="csr")
@@ -166,46 +168,86 @@ def IkFLz(v, k, Lz, fq, cfg):
     if (i > 99):
         print("Iterations:", i)
     return u
-
-def IkFLz_fast(v, k, Lhz, A1, fq, cfg):
-
-    # A1 = (I - k/2 Lhz) as sparse CSR, built once outside the time loop
-    
+def IkFLz_fast(v, k, Lzs, A1z, fq, cfg):
+    # A1z = I - k/2 Lzs, 1D, built once outside the time loop
     Mz2, Mx = cfg.space.Mz + 2, cfg.space.Mx
     idx = fq.nonzero()[0]
     w = np.sqrt(cfg.space.hx * cfg.space.hz)
 
-    lower = -k/2 * Lhz.diagonal(-1)
-    upper = -k/2 * Lhz.diagonal(1)
-    base  = 1.0 - k/2 * Lhz.diagonal(0)
+    lower = -k/2 * Lzs.diagonal(-1)
+    upper = -k/2 * Lzs.diagonal(1)
+    base  = 1.0 - k/2 * Lzs.diagonal(0)
 
     u = v.copy()
     for i in range(cfg.time.maxit):
         Fu  = F1(u, cfg, fq).data
         dFu = dF1(u, cfg, fq).data
 
-        r = (A1 @ u.reshape(Mz2, Mx)).reshape(-1) - v
+        U = u.reshape(Mx, Mz2)
+        r = (A1z @ U.T).T.reshape(-1) - v           # apply the 1D operator along z
         r[idx] -= k/2 * Fu
-        R = np.asfortranarray(r.reshape(Mz2, Mx))
+        R = np.asfortranarray(r.reshape(Mx, Mz2).T) # (Mz+2, Mx), z along rows
 
-        D = np.tile(base[:, None], (1, Mx))
-        D.reshape(-1)[idx] -= k/2 * dFu      # boundary rows only
-        D = np.asfortranarray(D)
+        D = np.tile(base, (Mx, 1))                  # (Mx, Mz+2)
+        D.reshape(-1)[idx] -= k/2 * dFu             # boundary entries only
+        D = np.asfortranarray(D.T)                  # (Mz+2, Mx)
 
-        du = thomasMethod(lower, D, upper, R).reshape(-1)
+        du = thomasMethod(lower, D, upper, R).T.reshape(-1)
         u -= du
 
         if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
             break
-        if (i > 99):
+        if i > 99:
             print("Iterations:", i)
     return u
 
+
+### Maybe JIT this whole function
+def IkFLz_JAX(v, k, Lzs, A1, fq, cfg):
+
+    
+    Mz2, Mx = cfg.space.Mz + 2, cfg.space.Mx
+    idx = fq.nonzero()[0]
+    # print(f"Index ={idx}")
+    # print(f" Laplace small in z", Lzs.toarray())
+    w = np.sqrt(cfg.space.hx * cfg.space.hz)
+    # diags are dense
+    lower = -k/2 * Lzs.diagonal(-1)
+    upper = -k/2 * Lzs.diagonal(1)
+    dia  = 1.0 - k/2 * Lzs.diagonal(0)
+    dia = np.tile(dia,Mx)
+
+    u = v.copy()
+    for i in range(cfg.time.maxit):
+
+        ### scipy sparse matrices, but really only scalar entries
+        Fu  = F1(u, cfg, fq).data
+        dFu = dF1(u, cfg, fq).data
+
+        dia_i = dia.copy()
+        dia_i[idx] -= k/2 * dFu
+
+        U = u.reshape(Mx, Mz2)
+        Lu = (Lzs @ U.T).T.reshape(-1)
+        r = u - k/2* Lu - v # apply the 1D operator along z
+        r[idx] -= k/2 * Fu
+        R = r 
+        
+
+        du = thomasMethodJAX(lower, dia_i, upper, R,Mx,Mz2)
+        u -= du
+
+        if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
+            break
+        if i > 99:
+            print("Iterations:", i)
+    return u
 
 # ----------------------------------------------------------------------
 # Cooling cycles
 # ----------------------------------------------------------------------
 @timer()
+@cpuprf
 def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     """
     Splitting  Lh (full Laplacian)  /  F1_q (boundary cooling):
@@ -249,8 +291,10 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     del solver
     return w if history else wn
 
+JAX = 1
 fast = 1
 @timer()
+@cpuprf
 def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     """
     Dimensional splitting  Lx  /  (Lz + F1_q):
@@ -261,9 +305,16 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     k = cfg.time.k_pause
     Mx,Mz = cfg.space.Mx, cfg.space.Mz
         
-    
-    Lx = sparse.kron(sparse.eye_array(Mz+2, Mz+2),Lx, format  = "csr") 
-    Lzb = sparse.kron(Lzs,sparse.eye_array(Mx, Mx),format = "csr")
+    Iz = sparse.eye_array(Mz+2, Mz+2)
+    Ix = sparse.eye_array(Mx,Mx)
+
+    # Extend to 2d
+    Lx = sparse.kron(Lx,Iz, format  = "csr") 
+    Lzb = sparse.kron(Ix,Lzs,format = "csr")
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq1d, format="csr")  # x slow
+
+    # np.savetxt("matLX.log",Lx.toarray(),fmt="%.6f")
+    # np.savetxt("matLZ.log",Lzb.toarray(),fmt="%.6f")
     M_l = Lx.shape[0]
     wn = v0.copy()
     I = sparse.eye_array(M_l, M_l, format="csr")
@@ -284,13 +335,13 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
         v = (I + k/2 * Lx) @ lux.solve(wnew)
         # (I - k/2 Lz - k/2 F)^-1
 
-        if fast == 1:
-            # if n == 0:
-            #     print("Using Thomas!")
-            
+        if JAX == 1:
+            wn = IkFLz_JAX(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+        elif (fast == 1):
             wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
         else:
             wn = IkFLz(v, k, Lzb, fq, cfg)
+        
         if history:
             w[:, n + 1] = wn
     return w if history else wn
@@ -391,17 +442,17 @@ def plot_field(cfg, u_vec, title, method, mark_max=False,save_fig=False):
     N = cfg.time.N
     x = np.linspace(hx, hx * Mx, Mx)
     z = np.linspace(0, cfg.target.Lz, Mz + 2)
-
+    U = u_vec.reshape((Mx,Mz+2))
     fig, ax = plt.subplots(figsize=(10, 8))
-    mesh = ax.pcolormesh(x, z, u_vec.reshape((Mz + 2, Mx)), cmap="jet", shading="auto")
+    mesh = ax.pcolormesh(x,z, U.T, cmap="jet", shading="auto")
     plt.colorbar(mesh, label="Temperature")
     ax.set_xlabel("x-axis [cm]")
     ax.set_ylabel("z-axis [cm]")
     ax.set_title(title + f"Method:{method}")
     if mark_max:
-        iz, ix = np.unravel_index(np.argmax(u_vec), (Mz + 2, Mx))
+        ix,iz = np.unravel_index(np.argmax(U),U.shape)
         ax.plot(x[ix], z[iz], marker="D", markersize=6, markerfacecolor="white",
-                markeredgecolor="black", label=f"Max Temperature = {u_vec[iz*Mx+ix]:.1f}")
+                markeredgecolor="black", label=f"Max Temperature = {U[ix,iz]:.1f}")
         ax.legend(loc="upper right")
     if save_fig:
         path = f"./benchmarks/data/imgs/"
@@ -483,8 +534,8 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 256
-    cfg = build_sim(N=300, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 1024
+    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -512,9 +563,6 @@ if __name__ == "__main__":
 
     # print("L_z matrix :"  )
    
-    # Lx = sparse.kron(Iz, Lhx, format="csr")
-    # Lz = sparse.kron(Lhz, Ix, format="csr")
-    fq = sparse.kron(fq1d, np.ones((Mx, 1)), format="csr")
 
     # --- Initial value after heating pulse ----------------------------
     v0 = F2_xz(cfg) * cfg.beam.t_pulse
@@ -528,8 +576,8 @@ if __name__ == "__main__":
     # print("Numba uses:", numba.get_num_threads())
     # print("Using 1 Thread")
     
-    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-    
+    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg, cpuprf = True)
     # numba.set_num_threads(2)
     # print("Using 4 threads")
     # os.environ["MKL_NUM_THREADS"] = "4"
@@ -538,7 +586,6 @@ if __name__ == "__main__":
     # print("Numba uses:", numba.get_num_threads())
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
         
-    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg)
     # fast = 0
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
