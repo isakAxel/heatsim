@@ -55,21 +55,13 @@ heatsim is developed in connection with a Master's thesis project at ESS and LTH
 - Eskil Hansen, Supervisor, LTH
 
 ## Installation
+Dependencies are declared in `pyproject.toml`.
 
 Clone the repository and install the package in editable mode from the repository root:
 
 ```bash
-git clone <repository-url>
-cd heatsim
 pip install -e .
 ```
-
-Dependencies are declared in `pyproject.toml`. To reproduce the exact versions used for the reported results, install from `requirements.txt` instead:
-
-```bash
-pip install -r requirements.txt
-```
-
 ## Usage
 
 Run a simulation as a module from the repository root:
