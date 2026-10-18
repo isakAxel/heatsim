@@ -20,29 +20,27 @@ The main goal is to evaluate time-splitting schemes for the heat equation, in pa
 - Profiling and benchmarking utilities
 
 ## Project structure
-heatsim/
-├──benchmarks
-│ ├── data/ # data directory that contains benchmark measurables
-│ └── erranalysis.py # simple scripts for running testing
-├── Sim/ # simulation package
-│ ├── init.py
-│ ├── config.py # material and simulation parameters
-│ ├── operators.py # discrete Laplacians and boundary terms
-│ ├── solvers.py # tridiagonal and linear solvers
-│ ├── visual.py # plotting helpers
-│ ├── heatsim2d.py # 2D simulation
-│ ├── heatsim2dMU.py # 2D simulation (MU variant)
-│ ├── heatsim3d.py # 3D simulation
-│ └── utils/
-│ ├── init.py
-│ ├── profiling.py # timing and profiling helpers
-│ └── utils.py # general helpers
-├── heatsim2.m / # MATLAB reference implementation (heatsim2.m)
-├── notebooks/ # exploratory notebooks
-├── pyproject.toml # package metadata and dependencies
-├── requirements.txt # pinned dependency versions
-├── setup.py
-└── README.md
+
+- **heatsim/**
+  - **benchmarks/**
+    - data/: benchmark measurables
+    - erranalysis.py: simple scripts for running tests
+  - **Sim/**: simulation package
+    - config.py: material and simulation parameters
+    - operators.py: discrete Laplacians and boundary terms
+    - solvers.py: tridiagonal and linear solvers
+    - visual.py: plotting helpers
+    - heatsim2d.py: 2D simulation
+    - heatsim2dMU.py: 2D simulation (MU variant)
+    - heatsim3d.py: 3D simulation
+    - **utils/**
+      - profiling.py: timing and profiling helpers
+      - utils.py: general helpers
+  - heatsim2.m: MATLAB reference implementation
+  - pyproject.toml: package metadata and dependencies
+  - requirements.txt: pinned dependency versions
+  - setup.py
+  - README.md
 
 
 ## Installation
