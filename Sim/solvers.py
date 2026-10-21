@@ -73,6 +73,34 @@ def thomasMethodJAX(lower, diag, upper, rhs, Mx,Mz):
     return x
 
 
+
+@njit(parallel=True,cache=True)
+def thomasMethodJAX_test(lower, diag, upper, rhs,cp,x,Mx,Mz):
+    """
+        Thomas method that solves for rhs
+    Params:
+        lower (Mz,1)
+        diag (Mz*Mx,1)
+        upper (Mx,1)
+        cp (Mz*Mx,1)
+        x (Mz*Mx,1)
+
+    """
+    for j in prange(Mx):
+        cp[0 + j*Mz] = upper[0] / diag[0 + j*Mz]
+        x[0+j*Mz] = rhs[ 0 + j*Mz] / diag[0 + j*Mz]
+        for i in range(1, Mz):
+            denom = diag[i + j*Mz] - lower[i-1] * cp[j*Mz + i-1]
+            if i < Mz - 1:
+                cp[i + j*Mz] = upper[i] / denom
+            x[i + j*Mz] = (rhs[i+ j*Mz] - lower[i-1] * x[j*Mz + i-1]) / denom
+        # not needed ?
+        # x[Mz-1 + j*Mz] = x[Mz-1]
+        for i in range(Mz - 2, -1, -1):
+            x[i + j*Mz] = x[i + j*Mz] - cp[i + j*Mz] * x[i+1 + j*Mz]
+            # TODO Move out communication could be issue
+    return x
+
 # This solver is for dense matrices need to revamp this
 @njit(cache=True)
 def LinSolve(L,U,rhs):
