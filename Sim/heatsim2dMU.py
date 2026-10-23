@@ -1,6 +1,6 @@
 import os, numba
 os.environ["MKL_NUM_THREADS"] = "4" 
-os.environ["OMP_NUM_THREADS"]  = "1"     
+# os.environ["OMP_NUM_THREADS"]  = "1" 
 from pypardiso import PyPardisoSolver
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,6 +16,7 @@ expit = special.expit
 
 
 
+import time
 
 # ----------------------------------------------------------------------
 # Boundary conditions
@@ -227,14 +228,14 @@ def IkFLz_JAX(v, k, Lzs, A1, fq, cfg):
         dia_i = dia.copy()
         dia_i[idx] -= k/2 * dFu
 
-        U = u.reshape(Mx, Mz2)
-        Lu = (Lzs @ U.T).T.reshape(-1)
+        Lu = (Lzs @ u)
         r = u - k/2* Lu - v # apply the 1D operator along z
         r[idx] -= k/2 * Fu
-        R = r 
         
-
-        du = thomasMethodJAX(lower, dia_i, upper, R,Mx,Mz2)
+        if False:
+            du = timed_thomas(lower, dia_i, upper, R,Mx,Mz2)
+        else:
+            du = thomasMethodJAX(lower, dia_i, upper, r,Mx,Mz2)
         u -= du
 
         if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
@@ -243,6 +244,12 @@ def IkFLz_JAX(v, k, Lzs, A1, fq, cfg):
             print("Iterations:", i)
     return u
 
+@timer()
+def timed_newton(*args):
+    return IkFLz_JAX(*args)
+@timer()
+def timed_thomas(*args):
+    return thomasMethodJAX(*args)
 # ----------------------------------------------------------------------
 # Cooling cycles
 # ----------------------------------------------------------------------
@@ -332,11 +339,17 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
         wnew = wn + k/2 * (Lzb @ wn)
         wnew[idx] += k/2 * F1(wn, cfg, fq).data
         # (I + k/2 Lx)(I - k/2 Lx)^-1
+        # t0 = time.perf_counter()
         v = (I + k/2 * Lx) @ lux.solve(wnew)
+        # tf = time.perf_counter()
         # (I - k/2 Lz - k/2 F)^-1
 
         if JAX == 1:
-            wn = IkFLz_JAX(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+            if(False):
+                print(f"Time for lux solve : { tf - t0}")
+                wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+            else:
+                wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
         elif (fast == 1):
             wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
         else:
@@ -535,11 +548,17 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 if __name__ == "__main__":
     plot_option = 1
     M = 1024
-    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3)
+    cfg = build_sim(N=100, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
-    numba.set_num_threads(2)
+    # compile the thomas algorithm
+    M = 2
+    l, d, u = np.zeros(M),np.ones(M*M),np.zeros(M)
+    r = np.ones(M*M)
+    _ = thomasMethodJAX(l,d,u,r,M,M)
+    # Set threads to 4
+    numba.set_num_threads(4)
 
     print("---------- Parameters for Simulation -------------\n",
           f"Simulation Material : {cfg.target.material} \n",
@@ -578,14 +597,26 @@ if __name__ == "__main__":
     
     u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
     # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg, cpuprf = True)
-    # numba.set_num_threads(2)
+    
+    numba.set_num_threads(1)
+    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+    # thomasMethodJAX.parallel_diagnostics(level=2)
+    print(numba.get_num_threads(), numba.threading_layer())
+    
+    numba.set_num_threads(8)
+    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+    # thomasMethodJAX.parallel_diagnostics(level=2)
+    print(numba.get_num_threads(), numba.threading_layer())
+
+    numba.set_num_threads(2)
+    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+    print(numba.get_num_threads(), numba.threading_layer())
     # print("Using 4 threads")
     # os.environ["MKL_NUM_THREADS"] = "4"
-    # u2 = PRCoolingCycle(v0, Lx_s, Lz_s, fq, cfg)
     # numba.set_num_threads(4)
     # print("Numba uses:", numba.get_num_threads())
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-        
+    print(thomasMethodJAX.signatures)
     # fast = 0
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
