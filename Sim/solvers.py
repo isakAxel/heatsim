@@ -86,16 +86,17 @@ def thomasMethodJAX_test(lower, diag, upper, rhs,cp,x,Mx,Mz):
         x (Mz*Mx,1)
 
     """
+    denominv = 0
     for j in prange(Mx):
-        cp[0 + j*Mz] = upper[0] / diag[0 + j*Mz]
-        x[0+j*Mz] = rhs[ 0 + j*Mz] / diag[0 + j*Mz]
+        denominv = 1/ diag[0 + j*Mz]
+        cp[0 + j*Mz] = upper[0] * denominv 
+        x[0+j*Mz] = rhs[ 0 + j*Mz] * denominv
+
         for i in range(1, Mz):
-            denom = diag[i + j*Mz] - lower[i-1] * cp[j*Mz + i-1]
+            denominv  = 1 /(diag[i + j*Mz] - lower[i-1] * cp[j*Mz + i-1])
             if i < Mz - 1:
-                cp[i + j*Mz] = upper[i] / denom
-            x[i + j*Mz] = (rhs[i+ j*Mz] - lower[i-1] * x[j*Mz + i-1]) / denom
-        # not needed ?
-        # x[Mz-1 + j*Mz] = x[Mz-1]
+                cp[i + j*Mz] = upper[i] * denominv
+            x[i + j*Mz] = (rhs[i+ j*Mz] - lower[i-1] * x[j*Mz + i-1]) * denominv
         for i in range(Mz - 2, -1, -1):
             x[i + j*Mz] = x[i + j*Mz] - cp[i + j*Mz] * x[i+1 + j*Mz]
             # TODO Move out communication could be issue
