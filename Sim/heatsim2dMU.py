@@ -152,10 +152,6 @@ def IkFLz(v, k, Lz, fq, cfg):
         Dia = sparse.coo_array((dFu, (idx, idx)), shape=(size, size)).tocsr()
         jacobian = A - k/2 * Dia
         
-        # if temp:
-        #     np.savetxt("tempFu.log",Fu)        
-        #     np.savetxt("tempdFu.log",dFu)
-        #     temp  = 0
 
         du,info = cg(jacobian.tocsc(),fu,rtol = 1e-8)
         if info > 0 :
@@ -267,9 +263,10 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     
     Ix = sparse.eye_array(Mx, Mx)
     Iz = sparse.eye_array(Mz + 2, Mz + 2)
-    L = sparse.kron(Iz,Lx, format  = "csr") + sparse.kron(Lz,Ix,format = "csr")
+    L = sparse.kron(Lx,Iz, format  = "csr") + sparse.kron(Ix,Lz,format = "csr")
     I = sparse.kron(Ix,Iz,format = "csr")
-    # I = sparse.eye_array(M_l, M_l, format="csr")
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq1d, format="csr")
+    
     M_l = L.shape[0]
 
     wn = v0.copy()
@@ -318,7 +315,7 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     # Extend to 2d
     Lx = sparse.kron(Lx,Iz, format  = "csr") 
     Lzb = sparse.kron(Ix,Lzs,format = "csr")
-    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq1d, format="csr")  # x slow
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq, format="csr")  # x slow
 
     # np.savetxt("matLX.log",Lx.toarray(),fmt="%.6f")
     # np.savetxt("matLZ.log",Lzb.toarray(),fmt="%.6f")
@@ -404,7 +401,7 @@ def HeunCoolingCyclev2(v0,Lx,Lz, fq, cfg, history = 0):
             w[:,n+1] = wn
     return w if history else wn
  
- 
+@cpuprf
 @timer()
 def TrapCoolingCycle(v0,Lx,Lz, fq, cfg, history = 0):
     """
@@ -421,6 +418,15 @@ def TrapCoolingCycle(v0,Lx,Lz, fq, cfg, history = 0):
     """
     N = cfg.time.N
     k = cfg.time.k_pause
+
+    Iz = sparse.eye_array(Mz+2, Mz+2)
+    Ix = sparse.eye_array(Mx,Mx)
+
+    # Extend to 2d
+    Lx = sparse.kron(Lx,Iz, format  = "csr") 
+    Lz = sparse.kron(Ix,Lz,format = "csr")
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq1d, format="csr")  
+    
     L = (Lx + Lz).tocsr()
     M_l = L.shape[0]
  
@@ -495,8 +501,8 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
     if ub.ndim == 2:
         ub = ub[:, -1]
 
-    fa = ua.reshape((Mz + 2, Mx))
-    fb = ub.reshape((Mz + 2, Mx))
+    fa = ua.reshape((Mx, Mz + 2)).T
+    fb = ub.reshape((Mx, Mz + 2)).T
     diff = fa - fb
     vmin, vmax = min(fa.min(), fb.min()), max(fa.max(), fb.max())
 
@@ -547,8 +553,8 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 1024
-    cfg = build_sim(N=100, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 512
+    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=.2,sigmay=.2)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -586,37 +592,24 @@ if __name__ == "__main__":
     # --- Initial value after heating pulse ----------------------------
     v0 = F2_xz(cfg) * cfg.beam.t_pulse
     # print("Temperature max after pulse:", np.max(v0))
-    # if plot_option:
-    #     plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
-
+    if plot_option:
+        plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
 
     # --- Solve --------------------------------------------------------
     #
     # print("Numba uses:", numba.get_num_threads())
     # print("Using 1 Thread")
     
-    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
-    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg, cpuprf = True)
+    u = PRCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    u2 = TrapCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    u3 = PRCoolingCycle2(v0,Lx_s,Lz_s,fq1d,cfg, cpuprf = True)
     
-    numba.set_num_threads(1)
-    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
-    # thomasMethodJAX.parallel_diagnostics(level=2)
-    print(numba.get_num_threads(), numba.threading_layer())
-    
-    numba.set_num_threads(8)
-    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
-    # thomasMethodJAX.parallel_diagnostics(level=2)
-    print(numba.get_num_threads(), numba.threading_layer())
-
-    numba.set_num_threads(2)
-    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
-    print(numba.get_num_threads(), numba.threading_layer())
     # print("Using 4 threads")
     # os.environ["MKL_NUM_THREADS"] = "4"
     # numba.set_num_threads(4)
     # print("Numba uses:", numba.get_num_threads())
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-    print(thomasMethodJAX.signatures)
+    
     # fast = 0
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
@@ -624,18 +617,24 @@ if __name__ == "__main__":
     # print(f" error L2-norm : {err2Norm}")
 
     # # --- Diagnostics --------------------------------------------------
-    # diff_coeff = cfg.target.D / (cfg.target.rho * cfg.target.C_p)
-    # diff_length = np.sqrt(diff_coeff * cfg.time.t_pause)
-    # print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
-    # print(f"That's {diff_length/h:.1f} grid cells")
-    # print(f"dt = {max(cfg.time.k_pause, cfg.time.k_pulse)}")
-    # print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
+    diff_coeff = cfg.target.D / (cfg.target.rho * cfg.target.C_p)
+    diff_length = np.sqrt(diff_coeff * cfg.time.t_pause)
+    print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
+    print(f"That's {diff_length/h:.1f} grid cells")
+    print(f"dt = {max(cfg.time.k_pause, cfg.time.k_pulse)}")
+    print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
 
 
-    if plot_option:
-        plot_field(cfg, u,
-                   f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
-                   "Peaceman Rachford BS with pardiso",
-                   mark_max=True)
+    # if plot_option:
+    #     plot_field(cfg, u,
+    #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
+    #                "PR-BS",
+    #                mark_max=True)
+    #     plot_field(cfg, u2,
+    #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
+    #                "TRAP",
+    #                mark_max=True)
 
-    # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Boundary Split'))
+    plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Boundary Split'))
+    plot_compare(cfg,u3,u2,labels = ('Dimensional Split', 'Trap no split'))
+
