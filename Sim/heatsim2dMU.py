@@ -6,11 +6,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
-
+import Sim.visual as vis
 from Sim.config import build_sim
-from Sim.operators import DiscLaplacian1D, F1, dF1
+from Sim.operators import DiscLaplacian1D, F1, dF1,F2_xz,F2_xyz
 from Sim.utils.profiling import timer,cpuprf
-from Sim.solvers import thomasMethod,thomasMethodJAX
+from Sim.solvers import thomasMethod,thomasMethodJAX,SymmSolver
 # Numerically stable sigmoid
 expit = special.expit
 
@@ -34,10 +34,10 @@ def BoundaryConditionNeumann(Lh, q0, qend):
     M = Lh.shape[0]
     _u = Lh.diagonal()[0] / -2          # = C/h^2
 
-    top = sparse.lil_array((1, M));    top[0, 0] = 2
-    bot = sparse.lil_array((1, M));    bot[0, -1] = 2
-    left = sparse.lil_array((M + 2, 1));  left[0, 0] = -2;  left[1, 0] = 1
-    right = sparse.lil_array((M + 2, 1)); right[-1, 0] = -2; right[-2, 0] = 1
+    top = sparse.lil_array((1, M));    top[0, 0] = 1
+    bot = sparse.lil_array((1, M));    bot[0, -1] = 1
+    left = sparse.lil_array((M + 2, 1));  left[0, 0] = -1;  left[1, 0] = 1
+    right = sparse.lil_array((M + 2, 1)); right[-1, 0] = -1; right[-2, 0] = 1
 
     Lh = sparse.vstack([top * _u, Lh.tolil(), bot * _u])
     Lh = sparse.hstack([left * _u, Lh, right * _u])
@@ -48,48 +48,6 @@ def BoundaryConditionNeumann(Lh, q0, qend):
     return Lh.tocsr(), sparse.csr_array(f_q)
 
 
-# ----------------------------------------------------------------------
-# Beam source in the x-z plane
-# ----------------------------------------------------------------------
-def P_bragg(z, dEdz_0, r0, h_cut=None, peak=3.5):
-    """
-    Depth-dose profile of the proton beam.
-
-    z       : depth points [cm]
-    dEdz_0  : stopping power at z = 0
-    r0      : Bragg peak location [cm]
-    peak    : peak-to-entrance ratio
-    """
-    sigma_z = 0.018 * r0
-    w = 0.15 * sigma_z if h_cut is None else h_cut
-
-    peak_h = 1.0 + (peak - 1.0) * np.exp(-((z - r0)**2) / (2 * sigma_z**2))
-    # peak_h = 1.0 + (peak - 1.0) * expit(-((z - r0)**2) / (2 * sigma_z**2))
-
-    cutoff = expit(-(z - r0) / w)
-    return dEdz_0 * peak_h * cutoff
-
-
-def F2_xz(cfg, r0=3.4):
-    """
-    Beam heating term dT/dt on the (Mz+2) x Mx grid (slice at y = cy), flattened
-    with index = iz*Mx + ix.
-    """
-    Mx, Mz = cfg.space.Mx, cfg.space.Mz
-    hx = cfg.space.hx
-    Lx, Lz = cfg.target.Lx, cfg.target.Lz
-    C_p = cfg.target.C_p
-    dEdz = cfg.target.dEdz
-    Ib, sx, sy = cfg.beam.Ib, cfg.beam.sigmax, cfg.beam.sigmay
-
-    xs = np.linspace(hx, hx * Mx, Mx)          # interior points in x
-    zs = np.linspace(0, Lz, Mz + 2)            # includes both z boundaries
-    x,z= np.meshgrid(xs,zs, indexing ="ij")  # Change reference definition
-
-    cx = Lx / 2
-    braggc = P_bragg(z, dEdz, r0)
-    dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2 / sx**2) * braggc
-    return dP.reshape(-1)
 
 
 # ----------------------------------------------------------------------
@@ -200,7 +158,7 @@ def IkFLz_fast(v, k, Lzs, A1z, fq, cfg):
 
 
 ### Maybe JIT this whole function
-def IkFLz_JAX(v, k, Lzs, A1, fq, cfg):
+def IkFLz_JAX(v, k, Lzs, fq, cfg):
 
     
     Mz2, Mx = cfg.space.Mz + 2, cfg.space.Mx
@@ -224,14 +182,18 @@ def IkFLz_JAX(v, k, Lzs, A1, fq, cfg):
         dia_i = dia.copy()
         dia_i[idx] -= k/2 * dFu
 
-        Lu = (Lzs @ u)
+        U = u.reshape(Mx, Mz2)
+        Lu = (U @ Lzs.T).reshape(-1)
+
         r = u - k/2* Lu - v # apply the 1D operator along z
         r[idx] -= k/2 * Fu
         
         if False:
             du = timed_thomas(lower, dia_i, upper, R,Mx,Mz2)
         else:
-            du = thomasMethodJAX(lower, dia_i, upper, r,Mx,Mz2)
+            # No difference between SymmSolver and ThomasMethodJax
+            du = thomasMethodJAX(lower,dia_i,upper,r,Mx,Mz2)
+            # du = SymmSolver(lower,dia_i,r,Mx,Mz2)
         u -= du
 
         if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
@@ -239,6 +201,7 @@ def IkFLz_JAX(v, k, Lzs, A1, fq, cfg):
         if i > 99:
             print("Iterations:", i)
     return u
+
 
 @timer()
 def timed_newton(*args):
@@ -346,7 +309,7 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
                 print(f"Time for lux solve : { tf - t0}")
                 wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
             else:
-                wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+                wn = IkFLz_JAX(v,k,Lzs,fq,cfg)
         elif (fast == 1):
             wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
         else:
@@ -553,8 +516,9 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 512
-    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=.2,sigmay=.2)
+    M = 1024
+    Mz = My = Mx = M
+    cfg = build_sim(N=700, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -563,8 +527,7 @@ if __name__ == "__main__":
     l, d, u = np.zeros(M),np.ones(M*M),np.zeros(M)
     r = np.ones(M*M)
     _ = thomasMethodJAX(l,d,u,r,M,M)
-    # Set threads to 4
-    numba.set_num_threads(4)
+   
 
     print("---------- Parameters for Simulation -------------\n",
           f"Simulation Material : {cfg.target.material} \n",
@@ -591,26 +554,43 @@ if __name__ == "__main__":
 
     # --- Initial value after heating pulse ----------------------------
     v0 = F2_xz(cfg) * cfg.beam.t_pulse
+    # v0 = F2_xyz(cfg) * cfg.beam.t_pulse
+    # vis.plot_BeamInt3D(cfg,v0,"3D beam intensity",None,True,step = 2)
+    # exit
     # print("Temperature max after pulse:", np.max(v0))
+    # if plot_option:
+        # plot_field(cfg, v0.reshape((My),Mx *(Mz+2))[50].reshape(-1), "Heat after 1st heating cycle\n", "Initial Heating Cycle")
     if plot_option:
-        plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
+        plot_field(cfg, v0 , "Heat after 1st heating cycle\n", "Initial Heating Cycle")
+
 
     # --- Solve --------------------------------------------------------
     #
-    # print("Numba uses:", numba.get_num_threads())
-    # print("Using 1 Thread")
     
-    u = PRCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
-    u2 = TrapCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
-    u3 = PRCoolingCycle2(v0,Lx_s,Lz_s,fq1d,cfg, cpuprf = True)
+    print("Using 1 Thread")
+    numba.set_num_threads(1)
+    print("Numba uses:", numba.get_num_threads())
+    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
     
-    # print("Using 4 threads")
-    # os.environ["MKL_NUM_THREADS"] = "4"
-    # numba.set_num_threads(4)
-    # print("Numba uses:", numba.get_num_threads())
-    # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
-    # fast = 0
+    # u2 = TrapCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    # u3 = PRCoolingCycle2(v0,Lx_s,Lz_s,fq1d,cfg, cpuprf = True)
+    
+    print("Using 4 threads")
+    numba.set_num_threads(4)
+    print("Numba uses:", numba.get_num_threads())
+    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg)
+     
+    
+  
+    
+    numba.set_num_threads(8)
+    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+
+    numba.set_num_threads(2)
+    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+    
+
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
     # err2Norm = linalg.norm(u2 - u, 2) * h
@@ -636,5 +616,5 @@ if __name__ == "__main__":
     #                mark_max=True)
 
     plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Boundary Split'))
-    plot_compare(cfg,u3,u2,labels = ('Dimensional Split', 'Trap no split'))
+    # plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Trap no split'))
 
