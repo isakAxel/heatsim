@@ -8,6 +8,36 @@ import jax.numpy as jnp
 """
 
 ### Algo 4.7 for Toeplitz ? 
+
+@njit(parallel=True,cache = True)
+def SymmSolver(s,diag,rhs,Mx,Mz):
+    """
+    Tridiagonal solver that uses a symmetric matrix, hence only 1 superdiagonal is stored and used.
+
+    Params:
+        s(Mz,1)
+        diag(Mz*Mx,1)
+        upper(Mx,1)
+    """
+    x = np.empty(Mx*Mz)
+    y = np.empty(Mx*Mz)
+    rinv = np.empty(Mx*Mz)
+    
+    for j in prange(Mx):
+        off = Mz*j
+        rinv[off] = 1.0 / diag[off]
+        y[off] = rhs[off]
+        for i in range(1,Mz):
+            t = s[i-1] * rinv[off + i - 1]
+            rinv[off+i] = 1.0 / (diag[off + i] - t * s[i - 1])
+    
+            y[i + off] = rhs[i + off] - t * y[off + i-1]
+
+        x[off+Mz-1] = y[off +Mz -1] * rinv[off + Mz - 1]
+        for i in range(Mz - 2, -1, -1):
+            x[i + off] = (y[off + i] - s[i] * x[off + i + 1]) * rinv[off + i]
+    return x
+
 ### Use this so can use Algo 4.3.6
 def SymmLZ(Lz,Mx):
     """
