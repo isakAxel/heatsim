@@ -78,7 +78,7 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
     Lz = DiscLaplacian1D(cfg,axis = "z")
     Lz,fq = BoundaryConditionNeumann(Lz,q0=1,qend=0)
     
-    fq = sparse.kron(fq, np.ones((Mx,1)), format = "csr")
+    # fq = sparse.kron(fq, np.ones((Mx,1)), format = "csr")
     # Lx = sparse.kron(Iz, Lx, format="csr")
     # Lz = sparse.kron(Lz, Ix, format="csr")
 
@@ -225,6 +225,14 @@ def CalcTime():
         sum += np.sum(res["time"])
 
     print(f"Total time for last sim was {sum/60} min")
+def ReshapeRefSol(refsol,M):
+    u_baseline = np.loadtxt(f"./benchmarks/data/{refsol}",skiprows = 1)
+    u_reshaped = u_baseline.reshape(M+2,M).T.reshape(-1)
+    res = pd.Series(u_reshaped)
+    ### Change directory to save
+    path = f"./benchmarks/data/{refsol}_T"
+    res.to_csv(path,sep = " ", index = False, float_format= "%.17e") 
+
 def BenchmarkMain(nthreads = None):
 
     Ns = np.array([100 * i for i in range(1,16) ])
@@ -233,7 +241,7 @@ def BenchmarkMain(nthreads = None):
     print(f"Trial for M = {M} and Ns = {Ns}")
     print("------Pause time is:", cfg.time.t_pause, "-----\n")
     
-    refsol = "MU_refsol_M512_N100000"
+    refsol = "MU_refsol_M512_N100000_T"
     if nthreads: 
         print(f"Nubmer of threads: {nthreads}")
         numba.set_num_threads(nthreads)
@@ -281,43 +289,49 @@ def BenchmarkMain(nthreads = None):
     # print(f"Saved results to {sim_test_name}\n",
     # "-------- Results : ----------\n",resdf)
 
-def ErrTable(M):
+def BenchmarkAlt():
 
-    methods = ["PR_DS", "PR_BS"]
-    ref = read_results(f"2DMU_TRAP_NsVsErrs_M{M}").set_index("k_pause")[["errs", "err_Linf"]]
-
+    Ns = np.array([100 * i for i in range(1,16) ])
+    M = 512
+    cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
+    print(f"Trial for M = {M} and Ns = {Ns}")
+    print("------Pause time is:", cfg.time.t_pause, "-----\n")
     
-    pieces = {}
-
-    for met in methods:
-        simname = f"2DMU_{met}_NsVsErrs_M{M}"
-        res = read_results(simname).set_index("k_pause")[["errs","err_Linf"]] 
-
-        diff = np.abs(res - ref)
-        for col in ["errs","err_Linf"]:
-            pieces[(met,col)] = diff[col]
-
-    out = pd.DataFrame(pieces)
-    out.columns.names = ["method","metric"]
-     
-    return out
+    refsol = "MU_refsol_M512_N100000"
+   
+   
+    print("Using refsol : ", refsol)
+    sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol = refsol)
+    resdf = save_results(sim_test_name,resultsDS)
+    print(f"Saved results to {sim_test_name}\n",
+    "-------- Results : ----------\n",resdf)
 
 
+    print("refsol= ",refsol)
+    sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
+    results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
+    resdf = save_results(sim_test_name, results)
+    print(f"Saved results to {sim_test_name}\n",
+        "-------- Results : ----------\n",resdf)
 if __name__ == "__main__":   
 
 
     M = 512
+   # ReshapeRefSol(refsol,M)
     # PlotEfficiency(M)
     # PlotMain(M)
     # CalcTime()
-    # nthreads = 1
-    # BenchmarkMain(nthreads)
+    nthreads = 1
+    BenchmarkMain(nthreads)
     # nthreads = 2
     # BenchmarkMain(nthreads)
     # nthreads = 4
     # BenchmarkMain(nthreads)
     # nthreads = 8
     # BenchmarkMain(nthreads)
+    # BenchmarkAlt()
+    # simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
 
     # simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
 

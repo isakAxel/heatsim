@@ -31,6 +31,7 @@ def timer(metric="perf_counter"):
             end  =  clock()
             t = end - start
             print(f"-------- Timing Results ----------")
+            print(f"Function {func.__name__}")
             print(f"[{metric}] - Execution time: {t:.4f} seconds")
             print("------------------------------------")
             return result

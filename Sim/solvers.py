@@ -1,13 +1,43 @@
 import numpy as np
 from numba import njit, prange
 import scipy.sparse as sparse
-
+import jax.numpy as jnp 
 """
     Module that involves "own-made" solvers, started to compare specific algorithms for the laplacian structure
 
 """
 
 ### Algo 4.7 for Toeplitz ? 
+
+@njit(parallel=True,cache = True)
+def SymmSolver(s,diag,rhs,Mx,Mz):
+    """
+    Tridiagonal solver that uses a symmetric matrix, hence only 1 superdiagonal is stored and used.
+
+    Params:
+        s(Mz,1)
+        diag(Mz*Mx,1)
+        upper(Mx,1)
+    """
+    x = np.empty(Mx*Mz)
+    y = np.empty(Mx*Mz)
+    rinv = np.empty(Mx*Mz)
+    
+    for j in prange(Mx):
+        off = Mz*j
+        rinv[off] = 1.0 / diag[off]
+        y[off] = rhs[off]
+        for i in range(1,Mz):
+            t = s[i-1] * rinv[off + i - 1]
+            rinv[off+i] = 1.0 / (diag[off + i] - t * s[i - 1])
+    
+            y[i + off] = rhs[i + off] - t * y[off + i-1]
+
+        x[off+Mz-1] = y[off +Mz -1] * rinv[off + Mz - 1]
+        for i in range(Mz - 2, -1, -1):
+            x[i + off] = (y[off + i] - s[i] * x[off + i + 1]) * rinv[off + i]
+    return x
+
 ### Use this so can use Algo 4.3.6
 def SymmLZ(Lz,Mx):
     """
@@ -45,6 +75,63 @@ def thomasMethod(lower, diag, upper, rhs):
             x[i, j] = dp[i] - cp[i] * x[i+1, j]
     return x
 
+### This is quicker do to removal of a bunch of reshaping overhead,
+### Try to implement JAX to get even more efficient np.array handling
+@njit(parallel=True,cache=True)
+def thomasMethodJAX(lower, diag, upper, rhs, Mx,Mz):
+    """
+        Thomas method that solves for rhs
+    Params:
+        lower (Mz,1)
+        diag (Mz*Mx,1)
+        upper (Mx,1)
+    """
+    x = np.empty(Mx*Mz)
+
+    for j in prange(Mx):
+        cp = np.empty(Mz - 1)
+        dp = np.empty(Mz)
+        cp[0] = upper[0] / diag[0 + j*Mz]
+        dp[0] = rhs[ 0 + j*Mz] / diag[0 + j*Mz]
+        for i in range(1, Mz):
+            denom = diag[i + j*Mz] - lower[i-1] * cp[i-1]
+            if i < Mz - 1:
+                cp[i] = upper[i] / denom
+            dp[i] = (rhs[i+ j*Mz] - lower[i-1] * dp[i-1]) / denom
+        x[Mz-1 + j*Mz] = dp[Mz-1]
+        for i in range(Mz - 2, -1, -1):
+            x[i + j*Mz] = dp[i] - cp[i] * x[i+1 + j*Mz]
+    return x
+
+
+
+@njit(parallel=True,cache=True)
+def thomasMethodJAX_test(lower, diag, upper, rhs,cp,x,Mx,Mz):
+    """
+        Thomas method that solves for rhs
+    Params:
+        lower (Mz,1)
+        diag (Mz*Mx,1)
+        upper (Mx,1)
+        cp (Mz*Mx,1)
+        x (Mz*Mx,1)
+
+    """
+    denominv = 0
+    for j in prange(Mx):
+        denominv = 1/ diag[0 + j*Mz]
+        cp[0 + j*Mz] = upper[0] * denominv 
+        x[0+j*Mz] = rhs[ 0 + j*Mz] * denominv
+
+        for i in range(1, Mz):
+            denominv  = 1 /(diag[i + j*Mz] - lower[i-1] * cp[j*Mz + i-1])
+            if i < Mz - 1:
+                cp[i + j*Mz] = upper[i] * denominv
+            x[i + j*Mz] = (rhs[i+ j*Mz] - lower[i-1] * x[j*Mz + i-1]) * denominv
+        for i in range(Mz - 2, -1, -1):
+            x[i + j*Mz] = x[i + j*Mz] - cp[i + j*Mz] * x[i+1 + j*Mz]
+            # TODO Move out communication could be issue
+    return x
 
 # This solver is for dense matrices need to revamp this
 @njit(cache=True)

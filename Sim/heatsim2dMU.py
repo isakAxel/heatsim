@@ -1,21 +1,22 @@
 import os, numba
 os.environ["MKL_NUM_THREADS"] = "4" 
-os.environ["OMP_NUM_THREADS"]  = "1"     
+# os.environ["OMP_NUM_THREADS"]  = "1" 
 from pypardiso import PyPardisoSolver
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
-
+import Sim.visual as vis
 from Sim.config import build_sim
-from Sim.operators import DiscLaplacian1D, F1, dF1
+from Sim.operators import DiscLaplacian1D, F1, dF1,F2_xz,F2_xyz
 from Sim.utils.profiling import timer,cpuprf
-from Sim.solvers import thomasMethod
+from Sim.solvers import thomasMethod,thomasMethodJAX,SymmSolver
 # Numerically stable sigmoid
 expit = special.expit
 
 
 
+import time
 
 # ----------------------------------------------------------------------
 # Boundary conditions
@@ -33,10 +34,10 @@ def BoundaryConditionNeumann(Lh, q0, qend):
     M = Lh.shape[0]
     _u = Lh.diagonal()[0] / -2          # = C/h^2
 
-    top = sparse.lil_array((1, M));    top[0, 0] = 2
-    bot = sparse.lil_array((1, M));    bot[0, -1] = 2
-    left = sparse.lil_array((M + 2, 1));  left[0, 0] = -2;  left[1, 0] = 1
-    right = sparse.lil_array((M + 2, 1)); right[-1, 0] = -2; right[-2, 0] = 1
+    top = sparse.lil_array((1, M));    top[0, 0] = 1
+    bot = sparse.lil_array((1, M));    bot[0, -1] = 1
+    left = sparse.lil_array((M + 2, 1));  left[0, 0] = -1;  left[1, 0] = 1
+    right = sparse.lil_array((M + 2, 1)); right[-1, 0] = -1; right[-2, 0] = 1
 
     Lh = sparse.vstack([top * _u, Lh.tolil(), bot * _u])
     Lh = sparse.hstack([left * _u, Lh, right * _u])
@@ -47,48 +48,6 @@ def BoundaryConditionNeumann(Lh, q0, qend):
     return Lh.tocsr(), sparse.csr_array(f_q)
 
 
-# ----------------------------------------------------------------------
-# Beam source in the x-z plane
-# ----------------------------------------------------------------------
-def P_bragg(z, dEdz_0, r0, h_cut=None, peak=3.5):
-    """
-    Depth-dose profile of the proton beam.
-
-    z       : depth points [cm]
-    dEdz_0  : stopping power at z = 0
-    r0      : Bragg peak location [cm]
-    peak    : peak-to-entrance ratio
-    """
-    sigma_z = 0.018 * r0
-    w = 0.15 * sigma_z if h_cut is None else h_cut
-
-    peak_h = 1.0 + (peak - 1.0) * np.exp(-((z - r0)**2) / (2 * sigma_z**2))
-    # peak_h = 1.0 + (peak - 1.0) * expit(-((z - r0)**2) / (2 * sigma_z**2))
-
-    cutoff = expit(-(z - r0) / w)
-    return dEdz_0 * peak_h * cutoff
-
-
-def F2_xz(cfg, r0=3.4):
-    """
-    Beam heating term dT/dt on the (Mz+2) x Mx grid (slice at y = cy), flattened
-    with index = iz*Mx + ix.
-    """
-    Mx, Mz = cfg.space.Mx, cfg.space.Mz
-    hx = cfg.space.hx
-    Lx, Lz = cfg.target.Lx, cfg.target.Lz
-    C_p = cfg.target.C_p
-    dEdz = cfg.target.dEdz
-    Ib, sx, sy = cfg.beam.Ib, cfg.beam.sigmax, cfg.beam.sigmay
-
-    xs = np.linspace(hx, hx * Mx, Mx)          # interior points in x
-    zs = np.linspace(0, Lz, Mz + 2)            # includes both z boundaries
-    x, z = np.meshgrid(xs, zs)
-
-    cx = Lx / 2
-    braggc = P_bragg(z, dEdz, r0)
-    dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2 / sx**2) * braggc
-    return dP.reshape(-1)
 
 
 # ----------------------------------------------------------------------
@@ -131,6 +90,7 @@ def IkFLz(v, k, Lz, fq, cfg):
             Configuration object
 
     """
+    ### TODO: change direction
     size = Lz.shape[0]
     idx = fq.nonzero()[0]
     I = sparse.eye_array(size, size, format="csr")
@@ -150,10 +110,6 @@ def IkFLz(v, k, Lz, fq, cfg):
         Dia = sparse.coo_array((dFu, (idx, idx)), shape=(size, size)).tocsr()
         jacobian = A - k/2 * Dia
         
-        # if temp:
-        #     np.savetxt("tempFu.log",Fu)        
-        #     np.savetxt("tempdFu.log",dFu)
-        #     temp  = 0
 
         du,info = cg(jacobian.tocsc(),fu,rtol = 1e-8)
         if info > 0 :
@@ -167,48 +123,98 @@ def IkFLz(v, k, Lz, fq, cfg):
     if (i > 99):
         print("Iterations:", i)
     return u
-
-def IkFLz_fast(v, k, Lhz, A1, fq, cfg):
-
-    # A1 = (I - k/2 Lhz) as sparse CSR, built once outside the time loop
-    
+def IkFLz_fast(v, k, Lzs, A1z, fq, cfg):
+    # A1z = I - k/2 Lzs, 1D, built once outside the time loop
     Mz2, Mx = cfg.space.Mz + 2, cfg.space.Mx
     idx = fq.nonzero()[0]
     w = np.sqrt(cfg.space.hx * cfg.space.hz)
 
-    lower = -k/2 * Lhz.diagonal(-1)
-    upper = -k/2 * Lhz.diagonal(1)
-    base  = 1.0 - k/2 * Lhz.diagonal(0)
+    lower = -k/2 * Lzs.diagonal(-1)
+    upper = -k/2 * Lzs.diagonal(1)
+    base  = 1.0 - k/2 * Lzs.diagonal(0)
 
     u = v.copy()
     for i in range(cfg.time.maxit):
         Fu  = F1(u, cfg, fq).data
         dFu = dF1(u, cfg, fq).data
 
-        r = (A1 @ u.reshape(Mz2, Mx)).reshape(-1) - v
+        U = u.reshape(Mx, Mz2)
+        r = (A1z @ U.T).T.reshape(-1) - v           # apply the 1D operator along z
         r[idx] -= k/2 * Fu
-        R = np.asfortranarray(r.reshape(Mz2, Mx))
+        R = np.asfortranarray(r.reshape(Mx, Mz2).T) # (Mz+2, Mx), z along rows
 
-        D = np.tile(base[:, None], (1, Mx))
-        D.reshape(-1)[idx] -= k/2 * dFu      # boundary rows only
-        D = np.asfortranarray(D)
+        D = np.tile(base, (Mx, 1))                  # (Mx, Mz+2)
+        D.reshape(-1)[idx] -= k/2 * dFu             # boundary entries only
+        D = np.asfortranarray(D.T)                  # (Mz+2, Mx)
 
-        du = thomasMethod(lower, D, upper, R).reshape(-1)
+        du = thomasMethod(lower, D, upper, R).T.reshape(-1)
         u -= du
 
         if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
             break
-        if (i > 99):
+        if i > 99:
             print("Iterations:", i)
     return u
 
 
+### Maybe JIT this whole function
+def IkFLz_JAX(v, k, Lzs, fq, cfg):
+
+    
+    Mz2, Mx = cfg.space.Mz + 2, cfg.space.Mx
+    idx = fq.nonzero()[0]
+    # print(f"Index ={idx}")
+    # print(f" Laplace small in z", Lzs.toarray())
+    w = np.sqrt(cfg.space.hx * cfg.space.hz)
+    # diags are dense
+    lower = -k/2 * Lzs.diagonal(-1)
+    upper = -k/2 * Lzs.diagonal(1)
+    dia  = 1.0 - k/2 * Lzs.diagonal(0)
+    dia = np.tile(dia,Mx)
+
+    u = v.copy()
+    for i in range(cfg.time.maxit):
+
+        ### scipy sparse matrices, but really only scalar entries
+        Fu  = F1(u, cfg, fq).data
+        dFu = dF1(u, cfg, fq).data
+
+        dia_i = dia.copy()
+        dia_i[idx] -= k/2 * dFu
+
+        U = u.reshape(Mx, Mz2)
+        Lu = (U @ Lzs.T).reshape(-1)
+
+        r = u - k/2* Lu - v # apply the 1D operator along z
+        r[idx] -= k/2 * Fu
+        
+        if False:
+            du = timed_thomas(lower, dia_i, upper, R,Mx,Mz2)
+        else:
+            # No difference between SymmSolver and ThomasMethodJax
+            du = thomasMethodJAX(lower,dia_i,upper,r,Mx,Mz2)
+            # du = SymmSolver(lower,dia_i,r,Mx,Mz2)
+        u -= du
+
+        if w * np.linalg.norm(du) < cfg.time.tol * (1.0 + w * np.linalg.norm(u)):
+            break
+        if i > 99:
+            print("Iterations:", i)
+    return u
+
+
+@timer()
+def timed_newton(*args):
+    return IkFLz_JAX(*args)
+@timer()
+def timed_thomas(*args):
+    return thomasMethodJAX(*args)
 # ----------------------------------------------------------------------
 # Cooling cycles
 # ----------------------------------------------------------------------
 @timer()
 @cpuprf
-def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
+def PRCoolingCycle(v0, Lx,Lz, fq1d, cfg, history = 0):
     """
     Splitting  Lh (full Laplacian)  /  F1_q (boundary cooling):
 
@@ -220,9 +226,10 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     
     Ix = sparse.eye_array(Mx, Mx)
     Iz = sparse.eye_array(Mz + 2, Mz + 2)
-    L = sparse.kron(Iz,Lx, format  = "csr") + sparse.kron(Lz,Ix,format = "csr")
+    L = sparse.kron(Lx,Iz, format  = "csr") + sparse.kron(Ix,Lz,format = "csr")
     I = sparse.kron(Ix,Iz,format = "csr")
-    # I = sparse.eye_array(M_l, M_l, format="csr")
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq1d, format="csr")
+    
     M_l = L.shape[0]
 
     wn = v0.copy()
@@ -251,6 +258,7 @@ def PRCoolingCycle(v0, Lx,Lz, fq, cfg, history = 0):
     del solver
     return w if history else wn
 
+JAX = 1
 fast = 1
 @timer()
 @cpuprf
@@ -264,12 +272,15 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
     k = cfg.time.k_pause
     Mx,Mz = cfg.space.Mx, cfg.space.Mz
         
-    
-    Lx = sparse.kron(sparse.eye_array(Mz+2, Mz+2),Lx, format  = "csr") 
-    Lzb = sparse.kron(Lzs,sparse.eye_array(Mx, Mx),format = "csr")
+    Iz = sparse.eye_array(Mz+2, Mz+2)
+    Ix = sparse.eye_array(Mx,Mx)
 
-    np.savetxt("matLX.log",Lx.toarray(),fmt="%.6f")
-    np.savetxt("matLZ.log",Lzb.toarray(),fmt="%.6f")
+    # Extend to 2d
+    Lx = sparse.kron(Lx,Iz, format  = "csr") 
+    Lzb = sparse.kron(Ix,Lzs,format = "csr")
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq, format="csr")  # x slow
+
+
     M_l = Lx.shape[0]
     wn = v0.copy()
     I = sparse.eye_array(M_l, M_l, format="csr")
@@ -287,16 +298,22 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
         wnew = wn + k/2 * (Lzb @ wn)
         wnew[idx] += k/2 * F1(wn, cfg, fq).data
         # (I + k/2 Lx)(I - k/2 Lx)^-1
+        # t0 = time.perf_counter()
         v = (I + k/2 * Lx) @ lux.solve(wnew)
+        # tf = time.perf_counter()
         # (I - k/2 Lz - k/2 F)^-1
 
-        if fast == 1:
-            # if n == 0:
-            #     print("Using Thomas!")
-            
+        if JAX == 1:
+            if(False):
+                print(f"Time for lux solve : { tf - t0}")
+                wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+            else:
+                wn = IkFLz_JAX(v,k,Lzs,fq,cfg)
+        elif (fast == 1):
             wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
         else:
             wn = IkFLz(v, k, Lzb, fq, cfg)
+        
         if history:
             w[:, n + 1] = wn
     return w if history else wn
@@ -346,9 +363,9 @@ def HeunCoolingCyclev2(v0,Lx,Lz, fq, cfg, history = 0):
             w[:,n+1] = wn
     return w if history else wn
  
- 
+@cpuprf
 @timer()
-def TrapCoolingCycle(v0,Lx,Lz, fq, cfg, history = 0):
+def TrapCoolingCycle(v0,Lx,Lz, fq1d, cfg, history = 0):
     """
     Implicit trapezoidal rule with NO splitting (second order in k). Used as the
     reference for the splitting errors.
@@ -363,6 +380,15 @@ def TrapCoolingCycle(v0,Lx,Lz, fq, cfg, history = 0):
     """
     N = cfg.time.N
     k = cfg.time.k_pause
+
+    Iz = sparse.eye_array(Mz+2, Mz+2)
+    Ix = sparse.eye_array(Mx,Mx)
+
+    # Extend to 2d
+    Lx = sparse.kron(Lx,Iz, format  = "csr") 
+    Lz = sparse.kron(Ix,Lz,format = "csr")
+    fq = sparse.kron(sparse.csr_array(np.ones((Mx, 1))), fq1d, format="csr")  
+    
     L = (Lx + Lz).tocsr()
     M_l = L.shape[0]
  
@@ -397,17 +423,17 @@ def plot_field(cfg, u_vec, title, method, mark_max=False,save_fig=False):
     N = cfg.time.N
     x = np.linspace(hx, hx * Mx, Mx)
     z = np.linspace(0, cfg.target.Lz, Mz + 2)
-
+    U = u_vec.reshape((Mx,Mz+2))
     fig, ax = plt.subplots(figsize=(10, 8))
-    mesh = ax.pcolormesh(x, z, u_vec.reshape((Mz + 2, Mx)), cmap="jet", shading="auto")
+    mesh = ax.pcolormesh(x,z, U.T, cmap="jet", shading="auto")
     plt.colorbar(mesh, label="Temperature")
     ax.set_xlabel("x-axis [cm]")
     ax.set_ylabel("z-axis [cm]")
     ax.set_title(title + f"Method:{method}")
     if mark_max:
-        iz, ix = np.unravel_index(np.argmax(u_vec), (Mz + 2, Mx))
+        ix,iz = np.unravel_index(np.argmax(U),U.shape)
         ax.plot(x[ix], z[iz], marker="D", markersize=6, markerfacecolor="white",
-                markeredgecolor="black", label=f"Max Temperature = {u_vec[iz*Mx+ix]:.1f}")
+                markeredgecolor="black", label=f"Max Temperature = {U[ix,iz]:.1f}")
         ax.legend(loc="upper right")
     if save_fig:
         path = f"./benchmarks/data/imgs/"
@@ -437,8 +463,8 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
     if ub.ndim == 2:
         ub = ub[:, -1]
 
-    fa = ua.reshape((Mz + 2, Mx))
-    fb = ub.reshape((Mz + 2, Mx))
+    fa = ua.reshape((Mx, Mz + 2)).T
+    fb = ub.reshape((Mx, Mz + 2)).T
     diff = fa - fb
     vmin, vmax = min(fa.min(), fb.min()), max(fa.max(), fb.max())
 
@@ -489,12 +515,18 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 4
-    cfg = build_sim(N=50, Mx=M, Mz=M, t_pulse=1.5e-3)
+    M = 256
+    Mz = My = Mx = M
+    cfg = build_sim(N=300, Mx=M, Mz=M, t_pulse=1.5e-3)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
-    numba.set_num_threads(4)
+    # compile the thomas algorithm
+    M = 2
+    l, d, u = np.zeros(M),np.ones(M*M),np.zeros(M)
+    r = np.ones(M*M)
+    _ = thomasMethodJAX(l,d,u,r,M,M)
+   
 
     print("---------- Parameters for Simulation -------------\n",
           f"Simulation Material : {cfg.target.material} \n",
@@ -518,51 +550,70 @@ if __name__ == "__main__":
 
     # print("L_z matrix :"  )
    
-    # Lx = sparse.kron(Iz, Lhx, format="csr")
-    # Lz = sparse.kron(Lhz, Ix, format="csr")
-    fq = sparse.kron(fq1d, np.ones((Mx, 1)), format="csr")
 
     # --- Initial value after heating pulse ----------------------------
     v0 = F2_xz(cfg) * cfg.beam.t_pulse
+    # v0 = F2_xyz(cfg) * cfg.beam.t_pulse
+    # vis.plot_BeamInt3D(cfg,v0,"3D beam intensity",None,True,step = 2)
+    # exit
     # print("Temperature max after pulse:", np.max(v0))
     # if plot_option:
-    #     plot_field(cfg, v0, "Heat after 1st heating cycle\n", "Initial Heating Cycle")
+        # plot_field(cfg, v0.reshape((My),Mx *(Mz+2))[50].reshape(-1), "Heat after 1st heating cycle\n", "Initial Heating Cycle")
+    if plot_option:
+        plot_field(cfg, v0 , "Heat after 1st heating cycle\n", "Initial Heating Cycle")
 
 
     # --- Solve --------------------------------------------------------
     #
-    # print("Numba uses:", numba.get_num_threads())
-    # print("Using 1 Thread")
     
-    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg,cpuprf = True)
-    # u2 = PRCoolingCycle(v0,Lx_s,Lz_s,fq,cfg, cpuprf = True)
-    # numba.set_num_threads(2)
-    # print("Using 4 threads")
-    # os.environ["MKL_NUM_THREADS"] = "4"
-    # u2 = PRCoolingCycle(v0, Lx_s, Lz_s, fq, cfg)
-    # numba.set_num_threads(4)
-    # print("Numba uses:", numba.get_num_threads())
-    # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
-        
-    # fast = 0
+    print("Using 1 Thread")
+    numba.set_num_threads(1)
+    print("Numba uses:", numba.get_num_threads())
+    u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    
+    
+    # u2 = TrapCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    # u3 = PRCoolingCycle2(v0,Lx_s,Lz_s,fq1d,cfg, cpuprf = True)
+    
+    print("Using 4 threads")
+    numba.set_num_threads(4)
+    print("Numba uses:", numba.get_num_threads())
+    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg)
+     
+    
+  
+    
+    numba.set_num_threads(8)
+    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+
+    numba.set_num_threads(2)
+    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
+    
+
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
     # err2Norm = linalg.norm(u2 - u, 2) * h
     # print(f" error L2-norm : {err2Norm}")
 
     # # --- Diagnostics --------------------------------------------------
-    # diff_coeff = cfg.target.D / (cfg.target.rho * cfg.target.C_p)
-    # diff_length = np.sqrt(diff_coeff * cfg.time.t_pause)
-    # print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
-    # print(f"That's {diff_length/h:.1f} grid cells")
-    # print(f"dt = {max(cfg.time.k_pause, cfg.time.k_pulse)}")
-    # print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
+    diff_coeff = cfg.target.D / (cfg.target.rho * cfg.target.C_p)
+    diff_length = np.sqrt(diff_coeff * cfg.time.t_pause)
+    print(f"Diffusion length: {diff_length:.4f} cm, grid spacing h: {h:.4f} cm")
+    print(f"That's {diff_length/h:.1f} grid cells")
+    print(f"dt = {max(cfg.time.k_pause, cfg.time.k_pulse)}")
+    print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(h**2)}")
 
 
-    if plot_option:
-        plot_field(cfg, u,
-                   f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
-                   "Peaceman Rachford BS with pardiso",
-                   mark_max=True)
+    # if plot_option:
+    #     plot_field(cfg, u,
+    #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
+    #                "PR-BS",
+    #                mark_max=True)
+    #     plot_field(cfg, u2,
+    #                f"Heat after 1st cooling cycle,\n M = {Mx}, N = {N}. ",
+    #                "TRAP",
+    #                mark_max=True)
 
-    # plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Boundary Split'))
+    plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Boundary Split'))
+    # plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Trap no split'))
+
