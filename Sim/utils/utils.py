@@ -121,6 +121,7 @@ def calculate_stoppingpower(material : dict, Ep, Lz, rho, n_jobs=8, n_workers=4,
     Se = ions_avg * 100  / rho      # eV/Å -> MeV cm²/g
     return depth, Se
 
+# TODO: Artifact
 def smooth_stoppingpower(z,dS):
     """
         Takes the stopping power and the target depth and smoothens the function by using scipy.interpolate. With spline

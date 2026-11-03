@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import os 
+from mayavi import mlab
+
 """
 This is a module for plotting the simulations WIP
 """
@@ -151,6 +153,78 @@ def plot_BeamInt3D(cfg, u_vec, title, method, mark_max=False, save_fig=False,
     if save_fig:
         path = "./benchmarks/data/imgs/"
         fig.savefig(path + f"Temp3D_{method}_M{Mx}_N{N}.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+def plot_3D(cfg,u,title, method):
+    """
+        Plots the three dimensional temperature distribution "u". Plots 2D-slices in the transversal "z"-direction using
+        Mayavi's 'volume_slice'.
+    
+        Params:
+            cfg (SimulationSetup)  : The simulation setup containing all parameters for the subject
+            u (ndarray (Mx*My*(Mz+2),) : The temperature distribution vector
+            title (str) : Header title of the plotted graph
+            method (str) : Name of the method used for the given simulation 
+    """
+
+    Mx, My, Mz2 = cfg.space.Mx, cfg.space.My, cfg.space.Mz + 2
+    U = u.reshape(Mx,My,Mz2)
+
+    # Creates a generalized numpy meshgrid
+    # Hardcoded for M, M, M+2
+    ### mgrid Excludes last point
+    x,y,z = np.mgrid[1:Mx+1,1:My+1,0:Mz2].astype('float64')
+    x *= cfg.space.hx
+    y *= cfg.space.hy
+    z *= cfg.space.hz 
+
+    font = "courier"
+
+    mlab.figure(f"Temperature distribution",bgcolor = (1,1,1), fgcolor = (0,0,0), size = (1500,900) )
+    # mlab.title(f"{title}.\nUsing method {method}",color = (1,1,1))
+    slc = mlab.volume_slice(x,y,z,U,colormap = "jet", plane_orientation = 'z_axes')
+    cb = mlab.colorbar(slc,title = "T",orientation="vertical")
+    cb.title_text_property.font_family = font
+    cb.title_text_property.bold = True
+    cb.label_text_property.font_family = font
+    cb.label_text_property.font_size = 13
+    cb.label_text_property.color = (0.2, 0.2, 0.2)
+    
+    ax = mlab.axes(xlabel="x [cm]", ylabel="y [cm]", zlabel="z [cm]")
+    ax.title_text_property.font_family = font
+    ax.label_text_property.font_family = font
+    mlab.outline(slc)
+    title = mlab.title(f"{title}\nUsing method {method}", size=0.25, color=(0, 0, 0), height=0.9)
+    title.property.font_family = font
+    mlab.show()
+
+
+
+def plot_2D_field(cfg,u,title,method,mark_max=False, save_fig = False,axes=("x","y")):
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    mesh = ax.imshow(u,cmap ="jet", origin ="lower")
+    fig.colorbar(mesh, ax = ax)
+
+    N = cfg.time.N
+    Mx = cfg.space.Mx
+
+    ax.set_xlabel(f"{axes[0]}-axis [cm]")
+    ax.set_ylabel(f"{axes[1]}-axis [cm]")
+    ax.set_title(f"{title} Method: {method}")
+    
+    if mark_max:
+        ix, iy = np.unravel_index(np.argmax(u), u.shape)
+        ax.plot(iy, ix, marker="D", markersize=6, markerfacecolor="white",
+                markeredgecolor="black",
+                label=f"Max Temperature = {u[ix, iy]:.1f}")
+        ax.legend()
+
+    if save_fig:
+        path = "./benchmarks/data/imgs/"
+        fig.savefig(path + f"Temp_{method}_M{Mx}_N{N}.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
