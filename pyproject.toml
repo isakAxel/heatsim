@@ -13,7 +13,10 @@ dependencies = [
     "nist-calculators",
     "mendeleev",
     "jax",
-    "numba"
+    "numba",
+    "mayavi",
+    "PyQt5"
+
 ]
 
 [build-system]

@@ -162,7 +162,7 @@ def IkFLz_JAX(v, k, Lzs, fq, cfg):
             du = timed_thomas(lower, dia_i, upper, R,Mx,Mz2)
         else:
             # No difference between SymmSolver and ThomasMethodJax
-            du = thomasMethodJAX(lower,dia_i,upper,r,Mx,Mz2)
+            du = thomasMethodJAX(lower,dia_i,upper,r,Mx,1,Mz2)
             # du = SymmSolver(lower,dia_i,r,Mx,Mz2)
         u -= du
 
@@ -488,9 +488,9 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 512
+    M = 230
     Mz = My = Mx = M
-    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
+    cfg = build_sim(N=200, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -498,7 +498,7 @@ if __name__ == "__main__":
     M = 2
     l, d, u = np.zeros(M),np.ones(M*M),np.zeros(M)
     r = np.ones(M*M)
-    _ = thomasMethodJAX(l,d,u,r,M,M)
+    _ = thomasMethodJAX(l,d,u,r,M,1,M)
    
 
     print("---------- Parameters for Simulation -------------\n",

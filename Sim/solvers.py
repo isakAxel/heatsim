@@ -78,17 +78,19 @@ def thomasMethod(lower, diag, upper, rhs):
 ### This is quicker do to removal of a bunch of reshaping overhead,
 ### Try to implement JAX to get even more efficient np.array handling
 @njit(parallel=True,cache=True)
-def thomasMethodJAX(lower, diag, upper, rhs, Mx,Mz):
+def thomasMethodJAX(lower, diag, upper, rhs, Mx,My,Mz):
     """
         Thomas method that solves for rhs
+
+        index = (ix*My + iy)*(Mz+2) + iz
     Params:
         lower (Mz,1)
         diag (Mz*Mx,1)
         upper (Mx,1)
     """
-    x = np.empty(Mx*Mz)
+    x = np.empty(Mx*My*Mz)
 
-    for j in prange(Mx):
+    for j in prange(Mx*My):
         cp = np.empty(Mz - 1)
         dp = np.empty(Mz)
         cp[0] = upper[0] / diag[0 + j*Mz]

@@ -180,7 +180,7 @@ def F2_xz(cfg, r0=3.4):
     dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2 / sx**2) * braggc
     return dP.reshape(-1)
 
-def F2_xyz(cfg, r0=3.4):
+def F2_xyz(cfg,beam_mode="Gaussian", r0=3.4):
     """
     Beam heating term dT/dt on the Mx x My x (Mz+2) grid 
     with index = (ix*My + iy)*(Mz+2) + iz
@@ -200,5 +200,8 @@ def F2_xyz(cfg, r0=3.4):
     cx = Lx / 2
     cy = Ly / 2
     braggc = P_bragg(z, dEdz, r0)
-    dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) * braggc
-    return dP.reshape(-1)
+    dP = braggc * Ib / C_p
+    if beam_mode == "Gaussian":
+        u = dP * np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) / ( 2 * np.pi * sx * sy)
+    # dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) * braggc
+    return u.reshape(-1)
