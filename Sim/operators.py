@@ -1,6 +1,9 @@
 import numpy as np
 from scipy import sparse
 
+"""
+    Spatial Discretization
+"""
 def DiscLaplacian(cfg) -> sparse.sparray[float]:
     """
     Creating the discrete Laplaceian Lh - an (M**2)x(M**2) matrix
@@ -37,6 +40,33 @@ def DiscLaplacian1D(cfg,axis = "x") -> sparse.sparray[float]:
     ve = np.ones(M)
     Lx = C/h**2 * sparse.dia_array(([ve,-2*ve,ve],[-1,0,1]),shape = (M,M))
     return Lx
+
+
+def BoundaryConditionNeumann(Lh, q0, qend):
+    """
+    Extends an (M x M) 1D Laplacian to (M+2 x M+2) by adding the two boundary
+    points with ghost-point Neumann conditions.
+
+    Returns:
+        Lh (csr) : (M+2 x M+2) operator
+        fq (csr) : (M+2 x 1) column marking boundary points (q0 at z=0, qend at z=Lz).
+                   Its non-zero pattern is where the cooling term F1 is applied.
+    """
+    M = Lh.shape[0]
+    _u = Lh.diagonal()[0] / -2          # = C/h^2
+
+    top = sparse.lil_array((1, M));    top[0, 0] = 2
+    bot = sparse.lil_array((1, M));    bot[0, -1] = 2
+    left = sparse.lil_array((M + 2, 1));  left[0, 0] = -2;  left[1, 0] = 1
+    right = sparse.lil_array((M + 2, 1)); right[-1, 0] = -2; right[-2, 0] = 1
+
+    Lh = sparse.vstack([top * _u, Lh.tolil(), bot * _u])
+    Lh = sparse.hstack([left * _u, Lh, right * _u])
+
+    f_q = np.zeros((M + 2, 1))
+    f_q[0, 0] = q0
+    f_q[-1, 0] = qend
+    return Lh.tocsr(), sparse.csr_array(f_q)
 
 def F1(v,cfg,fq = None) -> sparse.sparray:
     """

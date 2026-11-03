@@ -5,24 +5,36 @@ import os
 This is a module for plotting the simulations WIP
 """
 
-def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",ylim = None,ylabel = "error",**kwargs):
+def plot_errors(res: list, methods : list, title,fname = "logerrs",ylim = None,norm = fr'$L_2$',root = f"./benchmarks/data/error_plots/NormErrs"):
+    """
+        Plots the errors as a function of the time step size k (k_pause).
+    """
+    nplots = len(res)
 
-    nplots = len(ks)
     fig,axes = plt.subplots(ncols = nplots, figsize = (17,8))
-    # Hotfix
+    
     axes = [axes] if nplots == 1 else axes
-    
-    for k,err,ax,met in zip(ks,errs,axes,methods):
-        
-        k = np.asarray(k)
-        err = np.asarray(err)
-    
-        ax.loglog(k, err, 'rx', **kwargs)
+    fig.suptitle(title)
+    for res,ax,met in zip(res,axes,methods):
+        k = res['k_pause']
 
-        ax.set_title(f"{title} \n Using : {met}")
+        if norm == fr'$L_2$':
+            errs = res['errs']
+        elif norm == fr'$L_\infty$': 
+            errs = res['err_Linf']
+        else:
+            print("Norm is not defined/logged")
+            return
+
+        # Numpy arrays
+        k = np.asarray(k)
+        errs = np.asarray(errs)
+
+        ax.loglog(k, errs, 'rx')
+        ax.set_title(f"Using: {met}")
 
         # 2. Extract first marker as the common origin point
-        x0, y0 = k[0], err[0]
+        x0, y0 = k[0], errs[0]
        
         # 3. Span reference domain from first point to last point
         x_ref = np.logspace(np.log10(x0), np.log10(k[-1]), 100)
@@ -43,14 +55,15 @@ def plot_errors(ks : list, errs:list,methods : list, title,fname = "logerrs",yli
             ax.set_ylim(ylim[0],ylim[1])
         ax.set_xlabel("Time step size 'k_pause'")
 
-        if ylabel:
-            ax.set_ylabel(ylabel)
-                
+        # Change ylabel depending on chosen norm
+        ylabel = rf"error {norm}-norm"
+        ax.set_ylabel(ylabel)       
         ax.grid(True,which='both')
-        if 'label' in kwargs:
-            ax.legend() 
+        ax.legend()
 
-    fig.savefig(fname)
+    fullpath = f"{root}/{fname}"
+    fig.savefig(fullpath)
+    print(f"Saved figure to: {fullpath}")
 
 
 def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency", root = f"./benchmarks/data/error_plots/EFFICIENCY"):
@@ -88,6 +101,7 @@ def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency",
         
     fullpath = f"{root}/{fname}"
     fig.savefig(fullpath)
+    print(f"Saved figure to: {fullpath}")
 
 def plot_BeamInt3D(cfg, u_vec, title, method, mark_max=False, save_fig=False,
                    frac=0.1, step=1):
@@ -140,3 +154,15 @@ def plot_BeamInt3D(cfg, u_vec, title, method, mark_max=False, save_fig=False,
         plt.close(fig)
     else:
         plt.show()
+
+def plot_Ds(x,ys, labels, title = f"Electronic stopping power"):
+    fig, ax = plt.subplots()
+
+    for y,lab in zip(ys,labels):
+        ax.plot(x,y,label = lab)              # depth in µm
+    ax.set_xlabel("Depth [Å]")
+    ax.set_ylabel(r"$S_e$ (MeV cm$^2$/g)")
+    ax.set_ylim(0,np.max(y)*1.1)
+    ax.set_title(title)
+    ax.legend()
+    plt.show()

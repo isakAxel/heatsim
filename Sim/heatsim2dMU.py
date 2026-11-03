@@ -8,7 +8,7 @@ from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
 import Sim.visual as vis
 from Sim.config import build_sim
-from Sim.operators import DiscLaplacian1D, F1, dF1,F2_xz,F2_xyz
+from Sim.operators import DiscLaplacian1D,F1,dF1,F2_xz,BoundaryConditionNeumann
 from Sim.utils.profiling import timer,cpuprf
 from Sim.solvers import thomasMethod,thomasMethodJAX,SymmSolver
 # Numerically stable sigmoid
@@ -17,36 +17,6 @@ expit = special.expit
 
 
 import time
-
-# ----------------------------------------------------------------------
-# Boundary conditions
-# ----------------------------------------------------------------------
-def BoundaryConditionNeumann(Lh, q0, qend):
-    """
-    Extends an (M x M) 1D Laplacian to (M+2 x M+2) by adding the two boundary
-    points with ghost-point Neumann conditions.
-
-    Returns:
-        Lh (csr) : (M+2 x M+2) operator
-        fq (csr) : (M+2 x 1) column marking boundary points (q0 at z=0, qend at z=Lz).
-                   Its non-zero pattern is where the cooling term F1 is applied.
-    """
-    M = Lh.shape[0]
-    _u = Lh.diagonal()[0] / -2          # = C/h^2
-
-    top = sparse.lil_array((1, M));    top[0, 0] = 1
-    bot = sparse.lil_array((1, M));    bot[0, -1] = 1
-    left = sparse.lil_array((M + 2, 1));  left[0, 0] = -1;  left[1, 0] = 1
-    right = sparse.lil_array((M + 2, 1)); right[-1, 0] = -1; right[-2, 0] = 1
-
-    Lh = sparse.vstack([top * _u, Lh.tolil(), bot * _u])
-    Lh = sparse.hstack([left * _u, Lh, right * _u])
-
-    f_q = np.zeros((M + 2, 1))
-    f_q[0, 0] = q0
-    f_q[-1, 0] = qend
-    return Lh.tocsr(), sparse.csr_array(f_q)
-
 
 
 
@@ -380,7 +350,7 @@ def TrapCoolingCycle(v0,Lx,Lz, fq1d, cfg, history = 0):
     """
     N = cfg.time.N
     k = cfg.time.k_pause
-
+    Mx,Mz = cfg.space.Mx,cfg.space.Mz
     Iz = sparse.eye_array(Mz+2, Mz+2)
     Ix = sparse.eye_array(Mx,Mx)
 
@@ -442,6 +412,9 @@ def plot_field(cfg, u_vec, title, method, mark_max=False,save_fig=False):
     else:
         plt.show()
 
+
+def boundary_temp_xz(cfg,u):
+    return u.reshape((Mx,Mz+2))[:,0]
 
 def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
     """
@@ -515,9 +488,9 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 256
+    M = 512
     Mz = My = Mx = M
-    cfg = build_sim(N=300, Mx=M, Mz=M, t_pulse=1.5e-3)
+    cfg = build_sim(N=600, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -557,11 +530,11 @@ if __name__ == "__main__":
     # vis.plot_BeamInt3D(cfg,v0,"3D beam intensity",None,True,step = 2)
     # exit
     # print("Temperature max after pulse:", np.max(v0))
-    # if plot_option:
-        # plot_field(cfg, v0.reshape((My),Mx *(Mz+2))[50].reshape(-1), "Heat after 1st heating cycle\n", "Initial Heating Cycle")
+    
     if plot_option:
-        plot_field(cfg, v0 , "Heat after 1st heating cycle\n", "Initial Heating Cycle")
-
+        plot_field(cfg, v0 , "Heat after 1st heating cycle\n", "Initial Heating Cycle",mark_max=True)
+    B_temperature = boundary_temp_xz(cfg,v0)
+    print(f"max temperature on boundary: {np.max(B_temperature)} K")
 
     # --- Solve --------------------------------------------------------
     #
