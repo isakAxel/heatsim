@@ -97,7 +97,7 @@ def F1(v,cfg,fq = None) -> sparse.sparray:
         #
         idx = fq.nonzero()[0]
         fu = fq.copy()
-        fu.data = -(c_bolt*(((v[idx]+T0)/100.0)**4-(T0/100.0)**4) + c_newton*v[idx]) * 1/hz
+        fu.data = -(c_bolt*(((v[idx]+T0)/100.0)**4-(T0/100.0)**4) + c_newton*v[idx]) * 2/hz
         return fu
     else:
         A,V = cfg.target.A, cfg.target.V
@@ -128,7 +128,7 @@ def dF1(v,cfg,fq = None) -> sparse.sparray:
             # idx = fq.nonzero()[0]
         idx = fq.nonzero()[0]
         fu = fq.copy()
-        fu.data = (-4*c_bolt*((v[idx]+T0)/100)**3 *1/100 - c_newton) * 1/hz 
+        fu.data = (-4*c_bolt*((v[idx]+T0)/100)**3 *1/100 - c_newton) * 2/hz 
         return fu 
     else:
         A,V = cfg.target.A, cfg.target.V

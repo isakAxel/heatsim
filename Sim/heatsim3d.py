@@ -88,10 +88,9 @@ def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0):
 
         wnew = wn + k/2 * (Lzb @ wn)
         wnew[idx] += k/2 * F1(wn, cfg, fq).data
-        # (I + k/2 Lx)(I - k/2 Lx)^-1
-        v,info = cg(A, wnew, x0 = None, rtol = 1e-8)
-        if info != 0:
-            print(f"CG did not converge (info ={info})")
+        # TODO: can this be precomputed since (I+ k/2LxLy)(I-k/2LxLy)^-1 is constant throughout iterations N
+        # (I + k/2 L)(I - k/2 L)^-1
+        v = solve_cg(A, wnew, x0 = None, rtol = 1e-8)
         v = (I + k/2 * L) @ v 
     
         # (I - k/2 Lz - k/2 F)^-1
@@ -101,6 +100,65 @@ def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0):
             w[:, n + 1] = wn
     return w if history else wn
 
+def solve_cg(A,b,rtol=1e-5,**kwargs):
+    """
+        Conjugate gradient solver that checks whether or not the cg iteration converged.
+        rtol is specified for relative tolerance of convergence
+    """
+
+    X,info = cg(A,b,rtol = rtol, **kwargs)
+    if info > 0:
+        print(f"CG did not converge (info = {info})")
+    return X
+
+@timer()
+@cpuprf 
+def PRCoolingCycleDS_3split(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
+    """
+        Dimensional--Triple Split into Lx / Ly / (Lz + Fq):
+            Experimental method that uses intial strang splitting for the exact operator,
+            followed by a trapezoidal rule update, to hopefully retain order 2 convergance
+    
+            u_n+1 = (I - k/2 (Lz+F))^-1 (I + k/2 LxLy)(I - k/2 LxLy)^-1 (I + k/2 (Lz+F)) u_n
+            u_n+1 = 
+            Lx and Ly are "elevated" 3d Matrices, and Lzs is small
+    """
+    N = cfg.time.N
+    k = cfg.time.k_pause
+    Mx,My,Mz = cfg.space.Mx,cfg.space.My, cfg.space.Mz
+    
+    Lzb = sparse.kron(sparse.kron(sparse.eye_array(Mx, format="csr"), sparse.eye_array(My, format="csr"), format="csr"), Lzs, format="csr")
+    
+    M3 = Lx.shape[0]
+    wn = v0.copy()    
+    idx = fq.nonzero()[0]
+    I = sparse.eye_array(M3,M3, format = "csr")
+    if history:
+        w = np.zeros((M3, N + 1))
+        w[:, 0] = v0.copy()
+
+    print("------ Cooling Cycle Dimensional Split - Triple Split FDM --------")
+    Yi = (I- k/4*Ly)
+    Y = (I+ k/4*Ly)
+    Xi = (I- k/4*Lx)
+    X = (I+ k/4*Lx)
+
+    for n in range(N):
+        # Apply S
+        wn = solve_cg(Yi,Y @ wn,rtol = 1e-8)
+        wn = solve_cg(Xi,X @ wn,rtol = 1e-8)
+        # Nonlinear part
+        wnew = wn + k/2 * (Lzb @ wn)
+        wnew[idx] += k/2 * F1(wn,cfg,fq).data
+        # Nonlinear inverse
+        wn = IkFLz3D_Numba(wnew,k,Lzs,fq,cfg)
+        # Apply 2nd S
+        wn = solve_cg(Yi,Y @ wn,rtol = 1e-8)
+        wn = solve_cg(Xi,X @ wn,rtol = 1e-8)
+
+        if history:
+            w[:,n+1] = wn
+    return w if history else wn
 
 if __name__ == "__main__":
         
@@ -149,13 +207,16 @@ if __name__ == "__main__":
         v0 = F2_xyz(cfg) * cfg.beam.t_pulse
 
         
-        vis.plot_3D(cfg,v0, f"Initial temperature after heating cycle", "-")
-        exit()
-        
-        u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0)
+        # vis.plot_3D(cfg,v0, f"Initial temperature after heating cycle", "-")
+        u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
+
+        u2 = PRCoolingCycleDS_3split(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, timeit = False)
+        # u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
+
+        # u_diff = u - u2
 
         if plot_option:
-            vis.plot_3D(cfg,u,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
+            vis.plot_3D(cfg,u_diff,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
             
         if False:
             u = u.reshape(Mx*My,Mz+2)
