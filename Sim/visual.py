@@ -200,7 +200,16 @@ def plot_3D(cfg,u,title, method):
     title.property.font_family = font
     mlab.show()
 
+def plot_T_evol(cfg,T,ts,title="Temperature evolution", **kwargs):
 
+    fig,ax = plt.subplots(figsize= (10,8))
+    ax.plot(ts,T,**kwargs)              # depth in µm
+    
+    ax.set_xlabel("Time t [s]")
+    ax.set_ylabel("Temperature")
+    ax.set_title(title)
+    ax.legend()
+    fig.show()
 
 def plot_2D_field(cfg,u,title,method,mark_max=False, save_fig = False,axes=("x","y")):
     

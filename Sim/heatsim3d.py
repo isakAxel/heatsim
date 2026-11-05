@@ -1,13 +1,11 @@
 """
-    Template for 3D solver WIP
-
+    Module for 3D-Simulations (WIP) . The module contains 
 """
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
 
-from Sim.config import build_sim
+from Sim.config import build_sim,SimulationSetup
 from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz
 from Sim.utils.profiling import timer,cpuprf
 import Sim.visual as vis
@@ -160,12 +158,75 @@ def PRCoolingCycleDS_3split(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
             w[:,n+1] = wn
     return w if history else wn
 
+def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False):
+    """
+        Function that runs the full simulation time T = p*(t_pause + t_pulse) i.e. p pulses with heating and cooling phase.
+
+        Params:
+            cfg (SimulationSetup) : Steup containing the simulation parameters
+            Lx_s(sparray) : Spatial discretization (X-dir) 
+            Ly_s(sparray) : Spatial discretization (Y-dir)
+            Lz_s(sparray) : Spatial discretization (Z-dir)
+            fq_s(sparray) : Boundary condition vector (Z-dir)
+            plot_option(boolean) : Option to plot
+    """
+    
+    #unpacking stuff
+    p = cfg.beam.p
+    t_pause, t_pulse = cfg.beam.t_pause,cfg.beam.t_pulse
+    # Identities 
+    Ix = sparse.eye_array(Mx,Mx,format = "csr")
+    Iy = sparse.eye_array(My,My,format = "csr")
+    Iz = sparse.eye_array(Mz+2,Mz+2,format = "csr")
+    _onesx = sparse.csr_array(np.ones((Mx, 1)))
+    # Elevate operators
+    Fq  = sparse.kron(_onesx, sparse.kron(_onesx,fq_s), format="csr") 
+    Ly = sparse.kron(Ix, sparse.kron(Ly_s, Iz),format = "csr")
+    Lx = sparse.kron(Lx_s,sparse.kron(Iy,Iz), format = "csr")
+    
+    # Initial data
+    v = np.zeros(Mx*My*(Mz+2))
+    maxT = []
+    ts = []
+    # stopping tolerance for pulsing
+    tol = 1e-1
+    # Iterate pulses
+    for pk in range(p):
+        
+        # Heating Cycle
+        v += F2_xyz(cfg) * cfg.beam.t_pulse
+        maxT.append(np.max(v))
+        ts.append(pk*(t_pulse+t_pause) + cfg.beam.t_pulse)
+        # Cooling Cycle
+        v = PRCoolingCycleDS_Naive(v,Lx,Ly,Lz_s, Fq, cfg,history = 0)
+        maxT.append(np.max(v))
+        ts.append((pk+ 1)*(t_pulse+t_pause))
+
+        if pk > 1:      # We have 2 values to compare
+            # cmp values at ended cooling cycle
+            t_diff = np.abs(maxT[2*pk +1] - maxT[2*pk-1])
+
+            if (t_diff < tol): 
+                # Exit pulsing mode
+                p = pk+1
+                break
+
+
+    
+    if plot_option:
+        
+        vis.plot_T_evol(cfg,maxT,ts,title = f"Maximum Temperature evolution over {p} pulses", label = "Max Temperature", color = "red")
+        vis.plot_3D(cfg,v,"Temperature after full Pulse cycle", "Using PR-DS w CG")
+
+    return v,maxT,ts
+
 if __name__ == "__main__":
         
         plot_option = 1
         M = 100 
+        N = 100
         Mz = My = Mx = M
-        cfg = build_sim(N=100, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
+        cfg = build_sim(N=N, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2,p = 1)
         Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
         h = cfg.space.hx
     
@@ -190,46 +251,26 @@ if __name__ == "__main__":
         Lx_s = DiscLaplacian1D(cfg, axis="x")
         Ly_s = DiscLaplacian1D(cfg, axis="y")
         Lz_s = DiscLaplacian1D(cfg, axis="z")
-        Lz_s, fq1d = BoundaryConditionNeumann(Lz_s, q0=1, qend=0)
-        # Identities
-        Ix = sparse.eye_array(Mx,Mx,format = "csr")
-        Iy = sparse.eye_array(My,My,format = "csr")
-        Iz = sparse.eye_array(Mz+2,Mz+2,format = "csr")
-        # Ones
-        _onesx = sparse.csr_array(np.ones((Mx, 1)))
-        # Elevate operators        
-        Fq  = sparse.kron(_onesx, sparse.kron(_onesx,fq1d), format="csr") 
-        Ly = sparse.kron(Ix, sparse.kron(Ly_s, Iz),format = "csr")
-        Lx = sparse.kron(Lx_s,sparse.kron(Iy,Iz), format = "csr")
-       
-    
-        # --- Initial value after heating pulse ----------------------------
-        v0 = F2_xyz(cfg) * cfg.beam.t_pulse
-
+        Lz_s, fq1d = BoundaryConditionNeumann(Lz_s, q0=1, qend=2)
         
-        # vis.plot_3D(cfg,v0, f"Initial temperature after heating cycle", "-")
-        u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
 
-        u2 = PRCoolingCycleDS_3split(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, timeit = False)
-        # u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
+        v,_,_ = HeatIter(cfg,Lx_s,Ly_s,Lz_s,fq1d,plot_option = True)
 
-        # u_diff = u - u2
-
-        if plot_option:
-            vis.plot_3D(cfg,u_diff,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
+        # if False:
+        #     vis.plot_3D(cfg,u_diff,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
             
-        if False:
-            u = u.reshape(Mx*My,Mz+2)
-            s1 = 0
-            s2 = 34
+        if True:
+            u = v.reshape(Mx*My,Mz+2)
+            s1 = 34
+            
             u1 = u[:,s1].reshape(Mx,My)
 
-            u2 = u[:,s2].reshape(Mx,My)
+           
             vis.plot_2D_field(cfg, u1,
                 f"Heat after 1st cooling cycle for slice (i_z={s1}),\n M = {Mx}, N = {N}. ",
                 "PR-DS3D",
                 mark_max=True)
-            vis.plot_2D_field(cfg, u2,
-                f"Heat after 1st cooling cycle for slice (i_z={s2}),\n M = {Mx}, N = {N}. ",
-                "PR-DS3d",
-                mark_max=True)
+            # vis.plot_2D_field(cfg, u2,
+            #     f"Heat after 1st cooling cycle for slice (i_z={s2}),\n M = {Mx}, N = {N}. ",
+            #     "PR-DS3d",
+            #     mark_max=True)
