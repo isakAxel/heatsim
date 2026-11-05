@@ -3,6 +3,7 @@
 
 """
 import numpy as np
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
@@ -11,7 +12,7 @@ from Sim.config import build_sim
 from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz
 from Sim.utils.profiling import timer,cpuprf
 import Sim.visual as vis
-from Sim.solvers import thomasMethodJAX
+from Sim.solvers import thomasMethodJAX,thomasMethodJ,thomasMethodJ2
 # Numerically stable sigmoid
 expit = special.expit
 
@@ -32,8 +33,6 @@ def IkFLz3D_Numba(v, k, Lzs, fq, cfg):
 
     u = v.copy()
     for i in range(cfg.time.maxit):
-
-        ### scipy sparse matrices, but really only scalar entries
         Fu  = F1(u, cfg, fq).data
         dFu = dF1(u, cfg, fq).data
 
@@ -54,11 +53,51 @@ def IkFLz3D_Numba(v, k, Lzs, fq, cfg):
             break
         if i > 99:
             print("Iterations:", i)
-    return u
+    return np.asarray(u)
+
+def IkFLz3D_JAX(v, k, Lzs, fq, cfg):
+
+    
+    Mz2,My, Mx = cfg.space.Mz + 2,cfg.space.My ,cfg.space.Mx
+    idx = fq.nonzero()[0]
+    w = np.sqrt(cfg.space.hx * cfg.space.hz * cfg.space.hy )
+    # diags are dense
+    lower = jnp.asarray(-k/2 * Lzs.diagonal(-1))
+    upper = jnp.asarray(-k/2 * Lzs.diagonal(1) ) 
+    dia  = 1.0 - k/2 * Lzs.diagonal(0)
+    dia = jnp.tile(dia,Mx*My)
+
+    u = v.copy()
+    u = jnp.asarray(u)
+    v = jnp.asarray(v)
+    for i in range(cfg.time.maxit):
+
+        ### scipy sparse matrices, but really only scalar entries
+        Fu  = F1(u, cfg, fq).data
+        dFu = dF1(u, cfg, fq).data
+
+        dia_i = dia.copy()
+        dia_i = dia_i.at[idx].add(-k/2 * dFu)
+        
+        U = u.reshape(Mx*My, Mz2)
+        Lu = (Lzs @ U.T).T.ravel()       # apply Lzs along z to each line
+
+        r = u - k/2* Lu - v # apply the 1D operator along z
+        # r[idx] -= k/2 * Fu
+        r = r.at[idx].add( -k/2 * Fu)
+
+        du = thomasMethodJ(lower,dia_i,upper,r,Mx,My,Mz2)
+        u -= du
+
+        if w * np.linalg.norm(du) < cfg.time.tol:
+            break
+        if i > 99:
+            print("Iterations:", i)
+    return np.asarray(u)
 
 @timer()
 @cpuprf
-def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0):
+def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0, comp = "N"):
     """
     Dimensional splitting  Lx + Ly  /  (Lz + F1_q):
 
@@ -84,8 +123,14 @@ def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0):
     L = Lx + Ly
     A = (I - k/2 * L)
 
-    for n in range(N):
+    # To compare methods compiling methods JAX AND NUMBA
+    if comp == "J":
+        NewtonIter = IkFLz3D_JAX
+    else:
+        NewtonIter = IkFLz3D_Numba 
 
+    for n in range(N):
+        # print("iteration", n)
         wnew = wn + k/2 * (Lzb @ wn)
         wnew[idx] += k/2 * F1(wn, cfg, fq).data
         # TODO: can this be precomputed since (I+ k/2LxLy)(I-k/2LxLy)^-1 is constant throughout iterations N
@@ -94,7 +139,7 @@ def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0):
         v = (I + k/2 * L) @ v 
     
         # (I - k/2 Lz - k/2 F)^-1
-        wn = IkFLz3D_Numba(v,k,Lzs,fq,cfg)
+        wn = NewtonIter(v,k,Lzs,fq,cfg)
 
         if history:
             w[:, n + 1] = wn
@@ -163,7 +208,7 @@ def PRCoolingCycleDS_3split(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
 if __name__ == "__main__":
         
         plot_option = 1
-        M = 100 
+        M = 256 
         Mz = My = Mx = M
         cfg = build_sim(N=100, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
         Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
@@ -208,12 +253,13 @@ if __name__ == "__main__":
 
         
         # vis.plot_3D(cfg,v0, f"Initial temperature after heating cycle", "-")
-        u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
-
-        u2 = PRCoolingCycleDS_3split(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, timeit = False)
+        u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "N", cpuprf = True)
+        u2 = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "J",cpuprf = True)
+        
+        # u2 = PRCoolingCycleDS_3split(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, timeit = False)
         # u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
 
-        # u_diff = u - u2
+        u_diff = u - u2
 
         if plot_option:
             vis.plot_3D(cfg,u_diff,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
