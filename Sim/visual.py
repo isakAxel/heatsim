@@ -245,7 +245,7 @@ def plot_Ds(x,ys, labels, title = f"Electronic stopping power"):
         ax.plot(x,y,label = lab)              # depth in µm
     ax.set_xlabel("Depth [Å]")
     ax.set_ylabel(r"$S_e$ (MeV cm$^2$/g)")
-    ax.set_ylim(0,np.max(y)*1.1)
+    ax.set_ylim(0,np.max(ys)*1.1)
     ax.set_title(title)
     ax.legend()
     plt.show()
