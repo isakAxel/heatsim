@@ -16,7 +16,8 @@ dependencies = [
     "numba",
     "mayavi",
     "PyQt5",
-    "python-dotenv"
+    "python-dotenv",
+    "h5py"
 
 ]
 

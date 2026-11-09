@@ -42,7 +42,6 @@ The main goal is to evaluate time-splitting schemes for the heat equation, in pa
   - README.md
 
 
-## Installation
 ## Contact
 
 heatsim is developed in connection with a Master's thesis project at ESS and LTH. The people involved are:
@@ -52,13 +51,21 @@ heatsim is developed in connection with a Master's thesis project at ESS and LTH
 - Eskil Hansen, Supervisor, LTH
 
 ## Installation
-Dependencies are declared in `pyproject.toml`.
+Python dependencies are declared in `pyproject.toml`.
 
 Clone the repository and install the package in editable mode from the repository root:
 
 ```bash
 pip install -e .
 ```
+For simulated stopping powers to be used the software SRIM is needed. SRIM is an older software created for windows, so for MacOS and Linux the install must be made via wine.
+
+Read more about the SRIM install here:  http://www.srim.org/
+
+Read more about SRIM's python usability here: https://pysrim.readthedocs.io/en/latest/
+
+Finally an .env file needs to be setup to run SRIM, look at the file .env.example to see what has to set up in order to run SRIM with heatsim.
+
 ## Usage
 
 Run a simulation as a module from the repository root:
