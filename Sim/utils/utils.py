@@ -4,31 +4,43 @@ import numpy as np
 
 from star import ProtonSTARCalculator,ProtonMaterials
 from mendeleev import element
+from dotenv import load_dotenv
 
 from srim import TRIM,Layer,Target,Ion,output
-from Sim.paths import srimexepath,runsrimroot,basesrim
 from concurrent.futures import ProcessPoolExecutor
 import Sim.visual as vis
-
+from scipy.ndimage import uniform_filter1d,gaussian_filter1d,minimum_filter1d,maximum_filter1d
 """
     Module where different types of utilities will reside, such as data-processing, fetching
     or other parts of the pipeline which is not the actual simulation
 """
 
+# Machine-specific paths come from the .env file (see .env.example).
+# load_dotenv() searches for .env starting in this file's folder and walking up;
+# variables that are already set in the real environment take precedence.
+load_dotenv()
+ 
+def _env(var):
+    """Value of a required setting. Looked up on use, so importing this module never fails."""
+    value = os.environ.get(var)
+    if not value:
+        raise RuntimeError(f"{var} is not set. Copy .env.example to .env and fill it in.")
+    return value
+
+
 ### Material parameters are
 
+# TODO ARTIFACT
 def import_PSTAR_data(material,Ep):
     """
     Help-function to import PSTAR data 
-    #TODO: #FIXME
+
 
     Params: 
         material(str):
             Material denoted by either the Element Symbol or the shortened alloy-name
         Ep(float):
             Proton-energy in MeV
-        param(idk):
-            idk
 
     Returns:
         dS(float):
@@ -76,91 +88,139 @@ def import_mat_data(material):
     eps = EMISSIVITY_TABLE[material]
     return k,rho,c_p,eps
     
-
-
+def _make_layer(material, rho, Lz):
+    """
+    Builds the SRIM target layer.
+ 
+    Params:
+        material (str | dict):
+            Either a single element symbol / name, e.g. "Al", or a full composition
+            dict, e.g. SOLIDS_TABLE["SS316L"]["elements"]
+        rho (float): density [g/cm^3]
+        Lz (float): layer thickness [cm]
+    """
+    width = Lz * 1e8                                  # cm -> Å
+ 
+    if isinstance(material, dict):
+        composition = material
+    else:
+        composition = {
+            material: {'stoich': 1.0, 'E_d': 30.0, 'lattice': 0.0, 'surface': 3.0}
+        }
+ 
+    try:
+        return Layer(composition, density=rho, width=width)
+    except ValueError as e:
+        raise ValueError(f"Could not build SRIM layer for {material!r}: {e}") from e
+ 
+ 
 def make_job_dir(i):
-    job_dir = os.path.join(runsrimroot, f"run_{i}")
+    """Private copy of the SRIM installation, so runs never touch the original or each other."""
+    job_dir = os.path.join(_env("SIM_SRIM_RUNS_ROOT"), f"run_{i}")
     if not os.path.exists(job_dir):
-        shutil.copytree(basesrim, job_dir)
+        shutil.copytree(_env("SIM_SRIM_BASE"), job_dir)
     return job_dir
-
+ 
+ 
+def calculate_stoppingpower(material, Ep, Lz, rho, ions=400):
+    """
+    Stopping power of protons in the target, from a single (single-threaded) SRIM run.
+ 
+    Params:
+        material (str | dict): element symbol, or composition dict (see _make_layer)
+        Ep (float): proton energy [MeV]
+        Lz (float): target thickness [cm]
+        rho (float): density [g/cm^3]
+        number_ions (int): number of protons simulated (more = less noise, but slower)
+ 
+    Returns:
+        depth (ndarray): depth grid [Å]
+        Se (ndarray): stopping power at each depth [MeV cm²/g]
+    """
+    job_dir = make_job_dir("single")
+    layer = _make_layer(material, rho, Lz)
+    proton = Ion("H", energy=Ep * 1e6)                # MeV -> eV
+ 
+    trim = TRIM(Target([layer]), proton, number_ions=ions)
+    trim.run(job_dir)
+ 
+    ioniz = output.Results(job_dir).ioniz
+    depth = np.asarray(ioniz.depth)                   # [Å]
+    Se = np.asarray(ioniz.ions) * 100 / rho           # eV/Å per ion -> MeV cm²/g
+    return depth, Se
+ 
+ 
 def run_one(args):
+    """One SRIM job in its own directory (worker for calculate_stoppingpower_para)."""
     material, Ep, Lz, rho, number_ions, i = args
     job_dir = make_job_dir(i)
-
+ 
     proton = Ion("H", energy=Ep * 1e6)
-
-    if isinstance(material, dict):
-        # Full composition given, e.g. SOLIDS_TABLE["SS316L"]["elements"]
-        layer = Layer(material, density=rho, width=Lz * 1e8)
-    else:
-        # Single element or name, e.g. "Al" or "SS316L"
-        try:
-            layer = Layer({
-                material: {'stoich': 1.0, 'E_d': 30.0, 'lattice': 0.0, 'surface': 3.0}
-            }, density=rho, width=Lz * 1e8)
-        except ValueError as e:
-            print(f"Could not find material ({e}). Try Again")
-            
-
+    layer = _make_layer(material, rho, Lz)
+ 
     target = Target([layer])
     trim = TRIM(target, proton, number_ions=number_ions)
     trim.run(job_dir)
     results = output.Results(job_dir)
     return np.asarray(results.ioniz.ions)
-
-def calculate_stoppingpower(material : dict, Ep, Lz, rho, n_jobs=8, n_workers=4,
-                            ions_per_job=10):
+ 
+def calculate_stoppingpower_para(material : dict, Ep, Lz, rho, n_jobs=8, n_workers=4,
+                            ions_per_job=50):
+    """
+    Parallel version of calculate_stoppingpower: n_jobs independent SRIM runs of
+    ions_per_job protons each, spread over n_workers processes and averaged.
+    Same returns as calculate_stoppingpower.
+    """
     args = [(material, Ep, Lz, rho, ions_per_job, i) for i in range(n_jobs)]
     with ProcessPoolExecutor(max_workers=n_workers) as ex:
         arrays = list(ex.map(run_one, args))
         avg = np.mean(arrays, axis=1)           # one max per job (works if all arrays have the same length)
         print("avg per job:", avg)    
     ions_avg = np.mean(arrays, axis=0)     # per-ion, averaged across jobs
-    depth = np.asarray(output.Results(os.path.join(runsrimroot, "run_0")).ioniz.depth) 
+    depth = np.asarray(output.Results(os.path.join(_env("SIM_SRIM_RUNS_ROOT"), "run_0")).ioniz.depth) 
     Se = ions_avg * 100  / rho      # eV/Å -> MeV cm²/g
     return depth, Se
 
-# TODO: Artifact
-def smooth_stoppingpower(z,dS):
+
+
+"""
+    Smoothing functions to get a smooth Stopping power curve
+"""
+def smooth_conv(y,window = 15,mode = "uniform"):
     """
-        Takes the stopping power and the target depth and smoothens the function by using scipy.interpolate. With spline
+        Smoothens y, with a normalized convolutional kernel (assumes uniform spacing x)
+        
+        Params:
+            y (ndarray) : The curve y to be smoothed
+            window (int) : The number of points for the kernel (forced to be odd)
     """
-    sline = make_smoothing_spline(z,dS, lam = 100)
-    return sline(z),z
-# def calculate_stoppingpower(material: str,Ep,Lz,rho,plot = False, output_dir = r'/data/srim_output'):
+    if mode == "gaussian":
+        return gaussian_filter1d(y,sigma = window/6, mode = "nearest")
+        
+    return uniform_filter1d(y,size = window, mode = "nearest")
 
-#     proton = Ion("H",energy=Ep*1e6)
+def SoftSmooth(y, delta=2.0, window=15):
+    """
+    Smooth y wherever the local range (max - min) over `window` points is < delta,
+    and leave it untouched elsewhere.
 
-#     layerwidth = Lz # [cm]
-#     layerwidthAng = layerwidth *  1e8  # [Å]
-#     layer = Layer({
-#         material : {
-#             'stoich': 1.0,
-#             'E_d': 30.0,
-#             'lattice': 0.0,
-#             'surface': 3.0
-#         }}, density=rho, width = layerwidthAng) # [Å] -> 1e-4 [cm]
-    
-  
-#     target = Target([layer])
-#     trim = TRIM(target,proton, number_ions = 1000)
-#     srim_executable_directory = srimexepath
+    delta  : same units as y (MeV cm^2/g)
+    window : sweep width in points, also used as the smoothing width
+    """
+    y = np.asarray(y, dtype=float)
 
-#     trim.run(srim_executable_directory)
-#     ioniz = results.ioniz
+    rng = (maximum_filter1d(y, window, mode="nearest")
+           - minimum_filter1d(y, window, mode="nearest"))
+    flat = rng < delta                          # True where variation is "insignificant"
 
-#     depth_a = ioniz.depth
-#     ion_ev_per_ang = ioniz.ions
-#     Se = ion_ev_per_ang * 100.0 / rho        
+    base = uniform_filter1d(y, window, mode="nearest")
 
-#     if plot:
-#         vis.plot_Ds(depth_a / 1e4, Se,title= f"Stopping power for element {material}")
+    # Soft 0..1 weight so there is no visible step at the boundary.
+    # Eroding first keeps w > 0 only inside the flat region, so the peak never leaks in.
+    w = uniform_filter1d(minimum_filter1d(flat.astype(float), 5, mode="nearest"),
+                         5, mode="nearest")
 
-
-#     return Se
-    
-    
+    return w * base + (1 - w) * y
     
 
 EMISSIVITY_TABLE = {
@@ -174,15 +234,16 @@ SOLIDS_TABLE = {
     "SS316L" :  {
         "rho": 8, "cp": 0.5, "k": 16.3,
         "elements": {
-            "C":  {"stoich": 0.03},
-            "Si": {"stoich": 1.0},
-            "Mn": {"stoich": 2.0},
-            "Pb": {"stoich": 0.045},
-            "S":  {"stoich": 0.035},
-            "Cr": {"stoich": 18.0},
-            "Ni": {"stoich": 14.0},
-            "Mo": {"stoich": 3.0},
-            "N":  {"stoich": 0.1},
+            "Fe": {"stoich": 66.62},
+            "Cr": {"stoich": 18.19},
+            "Ni": {"stoich": 11.37},
+            "Mo": {"stoich": 1.45},
+            "Mn": {"stoich": 1.01},
+            "Si": {"stoich": 0.99},
+            "N":  {"stoich": 0.20},
+            "C":  {"stoich": 0.09},
+            "P":  {"stoich": 0.05},
+            "S":  {"stoich": 0.03},
         },
     },
 }
@@ -193,19 +254,21 @@ if __name__ == '__main__':
     # print("epsy",eps)
     # # Ep = np.linspace(500,1000,11)
     # Ep = 800
-    # dS = import_PSTAR_data("Al",Ep)
-    # print(f"dS : {dS}")
     
     el = 'SS316L'
     material = SOLIDS_TABLE[el]["elements"]
-    el = material = "Al"
+    # el = material = "Al"
     k,rho,cp,eps = import_mat_data(el)
     
     Lz = 10
     Ep = 150
-    dz,dS_LE = calculate_stoppingpower(material,Ep,Lz,rho,n_jobs = 4)
+    dz,dS_LE = calculate_stoppingpower_para(material,Ep,Lz,rho,n_jobs=4)
     Ep = 800 
-    dz,dS_HE = calculate_stoppingpower(material,Ep,Lz,rho,n_jobs = 4, )
-    labels= ["HE - 800 MeV", "LE - 150 MeV"]
-    vis.plot_Ds(dz,[dS_HE,dS_LE],labels,title= f"Stopping power for element {el}")
-
+    dz,dS_HE = calculate_stoppingpower_para(material,Ep,Lz,rho,n_jobs=4)
+    dedz = SoftSmooth(dS_HE,2,15)
+    dedz2 = SoftSmooth(dS_LE,2,15)
+    label = ["HE - 800 MeV", "LE - 150 MeV"]
+    # label = ["gauss","uniform"]
+    # vis.plot_Ds(dz,[dS_HE,dS_LE],labels,title= f"Stopping power for element {el}")
+    vis.plot_Ds(dz,[dedz,dedz2],label,title= f"Stopping power for element {el}")
+    

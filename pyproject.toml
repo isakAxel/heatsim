@@ -15,7 +15,8 @@ dependencies = [
     "jax",
     "numba",
     "mayavi",
-    "PyQt5"
+    "PyQt5",
+    "python-dotenv"
 
 ]
 
