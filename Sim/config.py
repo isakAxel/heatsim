@@ -3,7 +3,7 @@ from .utils import utils as ut
 
 MeV = 1e6
 mA = 1e-3
-@dataclass(frozen = True)
+@dataclass
 class TargetMaterial:
     rho : float
     C_p : float

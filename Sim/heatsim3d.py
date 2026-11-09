@@ -4,10 +4,10 @@
 import numpy as np
 from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
-
 from Sim.config import build_sim,SimulationSetup
-from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz
+from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz,F2_xyz_MC
 from Sim.utils.profiling import timer,cpuprf
+from Sim.utils.utils import save,readh5
 import Sim.visual as vis
 from Sim.solvers import thomasMethodJAX
 # Numerically stable sigmoid
@@ -50,8 +50,9 @@ def IkFLz3D_Numba(v, k, Lzs, fq, cfg):
 
         if w * np.linalg.norm(du) < cfg.time.tol:
             break
-        if i > 99:
-            print("Iterations:", i)
+        if i == (cfg.time.maxit - 1):
+            print("Did not convergence iteration = ", i)
+            # print("Iterations:", i)
     return u
 
 @timer()
@@ -88,7 +89,7 @@ def PRCoolingCycleDS_Naive(v0,Lx,Ly,Lzs, fq, cfg,history = 0):
         wnew[idx] += k/2 * F1(wn, cfg, fq).data
         # TODO: can this be precomputed since (I+ k/2LxLy)(I-k/2LxLy)^-1 is constant throughout iterations N
         # (I + k/2 L)(I - k/2 L)^-1
-        v = solve_cg(A, wnew, x0 = None, rtol = 1e-8)
+        v = solve_cg(A, wnew, x0 = None, rtol = cfg.time.tol * 1e-5)
         v = (I + k/2 * L) @ v 
     
         # (I - k/2 Lz - k/2 F)^-1
@@ -158,7 +159,94 @@ def PRCoolingCycleDS_3split(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
             w[:,n+1] = wn
     return w if history else wn
 
-def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False):
+
+def _line_tridiag(L, stride, n):
+    """
+    Tridiagonal (lower, diag, upper) of the 1D operator inside an elevated Kronecker operator.
+    stride : flat-index distance between neighbouring points along the line
+             (x: My*(Mz+2), y: Mz+2)
+    n      : number of points along the line
+    """
+    lo = L.diagonal(-stride)[::stride][:n-1]
+    d  = L.diagonal(0)[::stride][:n]
+    up = L.diagonal(stride)[::stride][:n-1]
+    return lo, d, up
+
+
+def _xy_line_solvers(Lx, Ly, c, Mx, My, Mz2):
+    """
+    Returns solve_x, solve_y with  solve_x(b) = (I - c*Lx)^-1 b  and  solve_y(b) = (I - c*Ly)^-1 b,
+    for vectors in the ordering index = (ix*My + iy)*Mz2 + iz. Uses thomasMethodJAX.
+    """
+    lo, d, up = _line_tridiag(Lx, My*Mz2, Mx)
+    lx, dx, ux = -c*lo, np.tile(1.0 - c*d, My*Mz2), -c*up      # lines along x: My*Mz2 of them
+    lo, d, up = _line_tridiag(Ly, Mz2, My)
+    ly, dy, uy = -c*lo, np.tile(1.0 - c*d, Mx*Mz2), -c*up      # lines along y: Mx*Mz2 of them
+
+    def solve_x(b):
+        B = np.ascontiguousarray(b.reshape(Mx, My, Mz2).transpose(1, 2, 0)).ravel()   # x fastest
+        s = thomasMethodJAX(lx, dx, ux, B, My, Mz2, Mx)
+        return s.reshape(My, Mz2, Mx).transpose(2, 0, 1).ravel()
+
+    def solve_y(b):
+        B = np.ascontiguousarray(b.reshape(Mx, My, Mz2).transpose(0, 2, 1)).ravel()   # y fastest
+        s = thomasMethodJAX(ly, dy, uy, B, Mx, Mz2, My)
+        return s.reshape(Mx, Mz2, My).transpose(0, 2, 1).ravel()
+
+    return solve_x, solve_y
+
+
+@timer()
+@cpuprf
+def PRCoolingCycleDS_3split_Thomas(v0, Lx, Ly, Lzs, fq, cfg, history=0):
+    """
+        Dimensional--Triple Split into Lx / Ly / (Lz + Fq):
+            Experimental method that uses intial strang splitting for the exact operator,
+            followed by a trapezoidal rule update, to hopefully retain order 2 convergance
+
+            u_n+1 = (I - k/2 (Lz+F))^-1 (I + k/2 LxLy)(I - k/2 LxLy)^-1 (I + k/2 (Lz+F)) u_n
+            Lx and Ly are "elevated" 3d Matrices, and Lzs is small
+            The Lx / Ly systems are tridiagonal along their own axis and solved with the Thomas method.
+    """
+    N = cfg.time.N
+    k = cfg.time.k_pause
+    Mx, My, Mz = cfg.space.Mx, cfg.space.My, cfg.space.Mz
+    Mz2 = Mz + 2
+
+    Lzb = sparse.kron(sparse.kron(sparse.eye_array(Mx, format="csr"), sparse.eye_array(My, format="csr"), format="csr"), Lzs, format="csr")
+
+    M3 = Lx.shape[0]
+    wn = v0.copy()
+    idx = fq.nonzero()[0]
+    I = sparse.eye_array(M3, M3, format="csr")
+    if history:
+        w = np.zeros((M3, N + 1))
+        w[:, 0] = v0.copy()
+
+    print("------ Cooling Cycle Dimensional Split - Triple Split FDM --------")
+    Y = (I + k/4*Ly)
+    X = (I + k/4*Lx)
+    solve_Yi, solve_Xi = _xy_line_solvers(Lx, Ly, k/4, Mx, My, Mz2)   # (I - k/4 Ly)^-1, (I - k/4 Lx)^-1
+
+    for n in range(N):
+        # Apply S
+        wn = solve_Yi(Y @ wn)
+        wn = solve_Xi(X @ wn)
+        # Nonlinear part
+        wnew = wn + k/2 * (Lzb @ wn)
+        wnew[idx] += k/2 * F1(wn, cfg, fq).data
+        # Nonlinear inverse
+        wn = IkFLz3D_Numba(wnew, k, Lzs, fq, cfg)
+        # Apply 2nd S
+        wn = solve_Yi(Y @ wn)
+        wn = solve_Xi(X @ wn)
+
+        if history:
+            w[:, n+1] = wn
+    return w if history else wn
+
+
+def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False,save_path = None):
     """
         Function that runs the full simulation time T = p*(t_pause + t_pulse) i.e. p pulses with heating and cooling phase.
 
@@ -170,10 +258,17 @@ def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False):
             fq_s(sparray) : Boundary condition vector (Z-dir)
             plot_option(boolean) : Option to plot
     """
-    
+    #Show bragg peak
+    if plot_option:
+        dz = cfg.target.dEdz[0]
+        dE = cfg.target.dEdz[1]
+        label = [f"Ep= {cfg.beam.Ep}"]
+        vis.plot_Ds(dz,[dE],label)
+        vis.plot_3D(cfg,F2_xyz_MC(cfg) * cfg.beam.t_pulse,"Temperature after 1 heating cycle","MC")
     #unpacking stuff
     p = cfg.beam.p
     t_pause, t_pulse = cfg.beam.t_pause,cfg.beam.t_pulse
+    Mx,My,Mz = cfg.space.Mx,cfg.space.My,cfg.space.Mz
     # Identities 
     Ix = sparse.eye_array(Mx,Mx,format = "csr")
     Iy = sparse.eye_array(My,My,format = "csr")
@@ -190,15 +285,16 @@ def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False):
     ts = []
     # stopping tolerance for pulsing
     tol = 1e-1
+    # Heatin cycle contribution constant over pulses -> precompute
+    HC = F2_xyz_MC(cfg) * cfg.beam.t_pulse
     # Iterate pulses
     for pk in range(p):
-        
         # Heating Cycle
-        v += F2_xyz(cfg) * cfg.beam.t_pulse
+        v += HC
         maxT.append(np.max(v))
         ts.append(pk*(t_pulse+t_pause) + cfg.beam.t_pulse)
         # Cooling Cycle
-        v = PRCoolingCycleDS_Naive(v,Lx,Ly,Lz_s, Fq, cfg,history = 0)
+        v = PRCoolingCycleDS_3split_Thomas(v,Lx,Ly,Lz_s, Fq, cfg,history = 0)
         maxT.append(np.max(v))
         ts.append((pk+ 1)*(t_pulse+t_pause))
 
@@ -218,19 +314,23 @@ def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False):
         vis.plot_T_evol(cfg,maxT,ts,title = f"Maximum Temperature evolution over {p} pulses", label = "Max Temperature", color = "red")
         vis.plot_3D(cfg,v,"Temperature after full Pulse cycle", "Using PR-DS w CG")
 
+    if save_path:
+        save(cfg,v,maxT,ts,save_path,name = f"Sim_{cfg.target.material}")
+        
     return v,maxT,ts
 
 if __name__ == "__main__":
+        """
+        Scripting interface as of now, write things in main to run the simulation
+        """
         
         plot_option = 1
-        M = 100 
+        # Resolution parameters
+        M = 70 
         N = 100
         Mz = My = Mx = M
-        cfg = build_sim(N=N, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2,p = 1)
-        Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
-        h = cfg.space.hx
-    
-       
+        ##  Building the parameter, default parameters are listed in config.py
+        cfg = build_sim(N=N, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2,p = 5, Ep = 800)
     
         print("---------- Parameters for Simulation -------------\n",
               f"Simulation Material : {cfg.target.material} \n",
@@ -241,26 +341,37 @@ if __name__ == "__main__":
               f"Time without pulse (Pause length): {cfg.time.t_pause}\n",
               f"Density rho : {cfg.target.rho}\n",
               f"Specific Heat Cp: {cfg.target.C_p}\n",
-              f"Stopping power dEdz: {cfg.target.dEdz:.2E}\n",
+              f"Stopping power dEdz: {cfg.target.dEdz[1][0]:.2E}\n",
               f"Peak current Ib : {cfg.beam.Ib}\n",
               f"Sigmax : {cfg.beam.sigmax} \n",
               f"Sigmay : {cfg.beam.sigmay} \n",
               f"T0 : {cfg.T0}\n")
 
         # --- Operators ---------------------------------------------------
+        # Laplacians
         Lx_s = DiscLaplacian1D(cfg, axis="x")
         Ly_s = DiscLaplacian1D(cfg, axis="y")
         Lz_s = DiscLaplacian1D(cfg, axis="z")
+        # Adding neumann condition
         Lz_s, fq1d = BoundaryConditionNeumann(Lz_s, q0=1, qend=2)
         
 
-        v,_,_ = HeatIter(cfg,Lx_s,Ly_s,Lz_s,fq1d,plot_option = True)
+        v,_,_ = HeatIter(cfg,Lx_s,Ly_s,Lz_s,fq1d,plot_option = plot_option,save_path=None)
 
         # if False:
         #     vis.plot_3D(cfg,u_diff,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
-            
+        
+        # data = readh5("Sim_Ni")
+
+
+
+        # Plotting saved data here
+        # vis.plot_3D(cfg,v,f"3D distribution of heat after {p} pulses M = {M}, N = {N}", "PR-DS_3split")
+
+        
         if True:
             u = v.reshape(Mx*My,Mz+2)
+            # s1 = 34 is the slice where the bragg peak is (given by the analytical estimate)
             s1 = 34
             
             u1 = u[:,s1].reshape(Mx,My)
