@@ -326,8 +326,8 @@ if __name__ == "__main__":
         
         plot_option = 1
         # Resolution parameters
-        M = 70 
-        N = 100
+        M = 50 
+        N = 50
         Mz = My = Mx = M
         ##  Building the parameter, default parameters are listed in config.py
         cfg = build_sim(N=N, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2,p = 5, Ep = 800)
@@ -358,30 +358,16 @@ if __name__ == "__main__":
 
         v,_,_ = HeatIter(cfg,Lx_s,Ly_s,Lz_s,fq1d,plot_option = plot_option,save_path=None)
 
-        # if False:
-        #     vis.plot_3D(cfg,u_diff,f"3D distribution of heat after 1st cooling cycle M = {Mx}, N = {N}", "PR-DS_naive")
-        
-        # data = readh5("Sim_Ni")
+        # Plotting max slice       
+        if plot_option:
+            u = v.reshape(Mx * My, Mz + 2)        # index = (ix*My + iy)*(Mz+2) + iz
+            # Maximum over the xy-plane for each z-slice, then the z-slice with the largest one
+            slice_max = u.max(axis=0)
+            s1 = int(np.argmax(slice_max))
+            u1 = u[:, s1].reshape(Mx, My)
 
+            print(f"max slice index s1 = {s1}, depth z = {np.linspace(0, cfg.target.Lz, Mz + 2)[s1]:.4f} cm")
 
-
-        # Plotting saved data here
-        # vis.plot_3D(cfg,v,f"3D distribution of heat after {p} pulses M = {M}, N = {N}", "PR-DS_3split")
-
-        
-        if True:
-            u = v.reshape(Mx*My,Mz+2)
-            # s1 = 34 is the slice where the bragg peak is (given by the analytical estimate)
-            s1 = 34
+            vis.plot_2D_field(cfg, u1, f"Heat after 1st cooling cycle for slice (i_z={s1}),\n M = {Mx}, N = {N}. ", "PR-DS3D",
+                                mark_max=True)
             
-            u1 = u[:,s1].reshape(Mx,My)
-
-           
-            vis.plot_2D_field(cfg, u1,
-                f"Heat after 1st cooling cycle for slice (i_z={s1}),\n M = {Mx}, N = {N}. ",
-                "PR-DS3D",
-                mark_max=True)
-            # vis.plot_2D_field(cfg, u2,
-            #     f"Heat after 1st cooling cycle for slice (i_z={s2}),\n M = {Mx}, N = {N}. ",
-            #     "PR-DS3d",
-            #     mark_max=True)
