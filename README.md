@@ -2,8 +2,6 @@
 
 heatsim is a Python project for simulating transient heat conduction in solid targets exposed to pulsed proton beams, developed in the context of the European Spallation Source (ESS) in Lund, Sweden.
 
-> **Note:** This repository is a GitHub mirror of the project's GitLab repository. The GitLab repository is the primary source.
-
 The main goal is to evaluate time-splitting schemes for the heat equation, in particular Peaceman-Rachford (PR) splitting, and to obtain accurate and efficient temperature estimates that support beam diagnostics at ESS. Accurate temperature fields help interpret beam-induced heating, validate beam parameters, and assess the thermal behavior of target materials under operating conditions.
 
 > **Status:** This project is under active development. Interfaces, file layout, and numerical methods may change, and results should be treated as preliminary until they have been validated against reference solutions.
