@@ -1,6 +1,19 @@
 import os
+import json
+from datetime import datetime
 import shutil
 import numpy as np
+import h5py
+import glob
+import pickle
+import yaml
+# HOTFIX
+_orig_load = yaml.load
+
+def _load_with_default(stream, Loader=None):
+    return _orig_load(stream, Loader=Loader or yaml.SafeLoader)
+yaml.load = _load_with_default
+# Fixing yaml bug
 
 from star import ProtonSTARCalculator,ProtonMaterials
 from mendeleev import element
@@ -221,7 +234,90 @@ def SoftSmooth(y, delta=2.0, window=15):
                          5, mode="nearest")
 
     return w * base + (1 - w) * y
+
+
+# -----------------
+# Data handling
+# -----------------
+
+def save(cfg, v, maxT, ts, save_path=r"data/saves/", name=None):
+    """
+    Save the output of HeatIter to an HDF5 file.
+
+    v    : 1D temperature rise vector, length Mx*My*(Mz+2)
+    maxT : maximum temperature after each heating and cooling phase [K]
+    ts   : times corresponding to the entries of maxT [s]
+    """
+    Mx, My, Mz2 = cfg.space.Mx, cfg.space.My, cfg.space.Mz + 2
+    dT = np.asarray(v, dtype=np.float64).reshape(Mx, My, Mz2)
+
+    os.makedirs(save_path, exist_ok=True)
+    if name is None:
+        name = f"heat_{datetime.now():%Y%m%d_%H%M%S}.h5"
+    else:
+        name = f"{name}_{datetime.now():%Y%m%d_%H%M%S}.h5"
+    filepath = os.path.join(save_path, name)
+
+    xs = np.linspace(cfg.space.hx, cfg.space.hx * Mx, Mx)
+    ys = np.linspace(cfg.space.hy, cfg.space.hy * My, My)
+    zs = np.linspace(0, cfg.target.Lz, Mz2)
+
+    cfg_blob = np.frombuffer(pickle.dumps(cfg), dtype=np.uint8)
+
+    with h5py.File(filepath, "w") as f:
+
+        f.create_dataset("cfg_pickle", data=cfg_blob)
+        d = f.create_dataset("dT", data=dT, compression="gzip", compression_opts=4)
+        d.attrs["units"] = "K"
+        d.attrs["axes"] = "(x, y, z)"
+        d.attrs["T0"] = cfg.T0
+
+        for key, arr in (("x", xs), ("y", ys), ("z", zs)):
+            f[key] = arr
+            f[key].attrs["units"] = "cm"
+
+        f["maxT"] = np.asarray(maxT, dtype=np.float64)
+        f["maxT"].attrs["units"] = "K"
+        f["ts"] = np.asarray(ts, dtype=np.float64)
+        f["ts"].attrs["units"] = "s"
+
+        f.attrs["pulses_run"] = cfg.beam.p
+
+    if filepath:
+        print(f"Saved data to file {name} in folder {save_path}")
+
+    return filepath
+
+def readh5(fname,path = r"data/saves/"):
     
+    files = glob.glob(f"{path}{fname}_*.h5")
+    if not files:
+        raise FileNotFoundError(f"No file matching '{fname}_*.h5' in '{path}'")
+    filepath = max(files,key = os.path.getmtime)
+
+
+    with h5py.File(filepath,"r") as f:
+
+        dT = f["dT"][...]
+        T0 = float(f["dT"].attrs["T0"])
+        cfg = pickle.loads(f["cfg_pickle"][...].tobytes())
+
+        data = {
+            "cfg": cfg,
+            "dT": dT,
+            "T_final": T0 + dT,
+            "T0": T0,
+            "x": f["x"][...],
+            "y": f["y"][...],
+            "z": f["z"][...],
+            "maxT": f["maxT"][...],
+            "ts": f["ts"][...],
+            "pulses_run": int(f.attrs["pulses_run"]),
+            "filepath": filepath,
+        }
+
+    return data
+
 
 EMISSIVITY_TABLE = {
     "Al" : 0.2,
