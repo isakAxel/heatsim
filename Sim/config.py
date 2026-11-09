@@ -30,7 +30,7 @@ class TargetMaterial:
         # dEdz = ut.import_PSTAR_data(material,Ep)
         # TODO: Hardcoded dEdz
         # dEdz = 1.67*MeV
-        dz,dEdz = ut.calculate_stoppingpower(material,Ep,Lz,rho,ions=50)
+        dz,dEdz = ut.calculate_stoppingpower(material,Ep,Lz,rho,ions=100)
         dEdz = ut.SoftSmooth(dEdz) * MeV
 
         return cls(rho=rho, C_p=C_p, Lx=Lx, Ly=Ly, Lz=Lz, dEdz=(dz,dEdz),
@@ -89,7 +89,7 @@ class TemporalParams:
     t_pause : float
     N : int = 100
     maxit : int = 200
-    tol : float = 1e-13
+    tol : float = 1e-12
    
 
     @property
