@@ -62,6 +62,8 @@ Read more about the SRIM install here:  http://www.srim.org/
 
 Read more about SRIM's python usability here: https://pysrim.readthedocs.io/en/latest/
 
+**Note:** For pysrim and SRIM compatibility, save SRIM output with American number formatting, using a period (.) as the decimal separator, not a comma.
+
 Finally an .env file needs to be setup to run SRIM, look at the file .env.example to see what has to set up in order to run SRIM with heatsim.
 
 ## Usage
@@ -69,9 +71,9 @@ Finally an .env file needs to be setup to run SRIM, look at the file .env.exampl
 Run a simulation as a module from the repository root:
 
 ```bash
-python -m Sim.heatsim2dMU
+python -m Sim.heatsim3d
 ```
-
+Simulation modules are found in the Sim folder, named `heatsim3d` and `heatsim2d`
 Default simulation parameters are set within the config.py module but a custom SimulationSetup object can be created with constructor. Plots are shown on screen by default.
 
 ## Development notes
