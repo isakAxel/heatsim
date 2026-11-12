@@ -232,7 +232,7 @@ JAX = 1
 fast = 1
 @timer()
 @cpuprf
-def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
+def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0, solver = "Numba"):
     """
     Dimensional splitting  Lx  /  (Lz + F1_q):
 
@@ -273,16 +273,25 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
         # tf = time.perf_counter()
         # (I - k/2 Lz - k/2 F)^-1
 
-        if JAX == 1:
+        if solver == "Numba":
             if(False):
                 print(f"Time for lux solve : { tf - t0}")
                 wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
             else:
                 wn = IkFLz_JAX(v,k,Lzs,fq,cfg)
-        elif (fast == 1):
-            wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
-        else:
+        elif(solver == "CG"):
             wn = IkFLz(v, k, Lzb, fq, cfg)
+        
+        # if JAX == 1:
+        #     if(False):
+        #         print(f"Time for lux solve : { tf - t0}")
+        #         wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+        #     else:
+        #         wn = IkFLz_JAX(v,k,Lzs,fq,cfg)
+        # elif (fast == 1):
+        #     wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+        # else:
+        #     wn = IkFLz(v, k, Lzb, fq, cfg)
         
         if history:
             w[:, n + 1] = wn

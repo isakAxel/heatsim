@@ -6,6 +6,7 @@ from scipy import linalg
 from typing import Callable
 from Sim.config import build_sim,SimulationSetup
 import pandas as pd
+from functools import partial
 from Sim.heatsim2d import TrapBasic,modPRSolver,F1,F2
 from Sim.heatsim2dMU import (PRCoolingCycle, PRCoolingCycle2, TrapCoolingCycle,
                              HeunCoolingCyclev2, BoundaryConditionNeumann,
@@ -105,7 +106,7 @@ def run_convergence_sweep_MU(Ns,methodA : tuple[str,Callable], cfg: SimulationSe
     for i, N in enumerate(Ns):
         cfg.time.N = N       # mutate TemporalParams, k_pulse/k_pause follow
         print(f"N={N}  hx={cfg.space.hx}, hz={cfg.space.hz}  k_pause={cfg.time.k_pause:.4e}")
-        u_A, dt, nthreads = run_timed(schemeA,v0,Lx,Lz,fq,cfg)
+        u_A, dt, nthreads = run_timed(schemeA,v0,Lx,Lz,fq,cfg,name=methodA[0])
        
         
         results["time"][i] = dt
@@ -157,51 +158,40 @@ def read_results(simname, datetime = None ,root ="./benchmarks/data") -> pd.Data
     return pd.read_csv(readstr, sep = r"\s+", engine = "python")
 
 
+def get_simname(method : str,M = 512):
+    # Returns simname for a given method tag and resolution M
+    return f"2DMU_{method}_NsVsErrs_M{M}"
 def PlotEfficiency(M):
 
-    simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
-
-    simnames2 = [f"2DMU_PR_BS_NsVsErrs_M{M}",  f"2DMU_TRAP_NsVsErrs_M{M}"]
-    simnames = simnames + simnames2
-    root = "./benchmarks/data/NL_SETUP"
+    methods = [f"PR_DSPAR{i}" for i in [1,2,4,8]] + ["TRAP","PR_DS"]
+    simnames = [get_simname(met) for met in  methods]
+    
+    root = "./benchmarks/data"
     res = [read_results(sim,root = root) for sim in simnames]
-    methods = ["PR-Boundary Split", "Trapezoidal Rule"]
+    methods = ["Trap Rule","PR-DS (CG)"]
     # Para methods
-    paramethods = ["DS 1 Thread" , "DS 2 Threads", "DS 4 Threads", "DS 8 Threads"]    
+    paramethods = ["PR-DS(T) (1 thread)", "PR-DS(T) (2 thread)", "PR-DS(T) (4 thread)", "PR-DS(T) (8 thread)"]    
     methods = paramethods + methods
-    vis.plot_efficiency(res,methods,"Logarithmic error over computation time for all methods (Non-linear setup)", M,f"eff_PARA_ALLMETHODS_NL2_M{M}")
+    vis.plot_efficiency(res,methods,None, M,f"eff_PARA_ALLMETHODS_M{M}v3_test")
 
-def PlotMain(M):
+def PlotMain(M,nonlinear = 0):
 
     simnames = [ f"2DMU_PR_BS_NsVsErrs_M{M}",f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_TRAP_NsVsErrs_M{M}"]
-    root = "./benchmarks/data/NL_SETUP"
+    root = "./benchmarks/data"
+    fname_tag = ""
+    if nonlinear:
+        root = "./benchmarks/data/NL_SETUP"
+        fname_tag = f"_NL"
     res = [read_results(sim,root = root) for sim in simnames]
    
-    mets = ["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"]
-
-    vis.plot_errors(res,mets,title = f"Logarithmic errors over varying time resolutions. Spatial resolution M = {M} (Non-Linear setup)",
-                    fname = f"PR_errs_ALL_NL_M{M}",ylim = [1e-7,1e-0]) 
+    mets = [f"PR-Boundary Split",f"PR-Dimensional Split", f"Trapezoidal Rule"]
+    titleNone = None
+    vis.plot_errors(res,mets,title = titleNone,
+                    fname = f"PR_errs_ALL{fname_tag}_M{M}",ylim = [1e-7,1e-0]) 
     plt.close()
-    vis.plot_errors(res,mets, title= f"Logarithmic errors over varying time resolutions. Spatial resolution M = {M} (Non-Linear setup) ", 
-                    fname=f"PR_errs_ALL_NL_Linf_M{M}", ylim = [1e-7,1e-0],norm = fr'$L_\infty$')
-    plt.close()
-    # spliterrDS = resTrap['errs'] - resDS["errs"] 
-
-    # spliterrBS = np.abs( resTrap['errs'] - resBS["errs"]) 
-    # ks = resBS["k_pause"]
-
-    
-    # plt.loglog(ks,spliterrBS,'x',label = "splitting error BS")
-    # plt.loglog(ks,spliterrDS,'x',label = "splitting error DS")
-    # plt.legend()
-    # plt.grid(which= 'both')
-    # plt.ylabel = "Error L2norm"
-    # plt.xlabel = "k - step size"
-    
-    # plt.show()
-
-    # vis.plot_errors(ks,[spliterrBS,spliterrDS,spliterrTrap],["PR-Boundary Split","PR-Dimensional Split", "Trapezoidal Rule"],title = f"Splitting errors over time resolutions.",
-                    # fname = "PR_spliterr_BS_DS_Trap_M512", label = f"Spatial resolution M = {M}" )
+    vis.plot_errors(res,mets, title= titleNone , 
+                    fname=f"PR_errs_ALL{fname_tag}_Linf_M{M}", ylim = [1e-7,1e-0],norm = fr'$l_\infty$')
+   
 def CalcTime():
     simnameBS = f"2DMU_PR_BS_NsVsErrs_M{M}"
     simnameDS = f"2DMU_PR_DS_NsVsErrs_M{M}"
@@ -228,11 +218,13 @@ def BenchmarkMain(nthreads = None):
 
     Ns = np.array([100 * i for i in range(1,16) ])
     M = 512
-    cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3, sigmax= 0.2, sigmay =0.2)
+    cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3, sigmax= 2, sigmay = 2)
+    # hardcoded
+    cfg.target.dEdz = 1.67 * 1e6
     print(f"Trial for M = {M} and Ns = {Ns}")
     print("------Pause time is:", cfg.time.t_pause, "-----\n")
     
-    refsol = f"MU_refsol_NL_M{M}_N100000_test"
+    refsol = f"MU_refsol_M512_N100000_T"
 
     if nthreads: 
         # print(f"Nubmer of threads: {nthreads}")
@@ -240,7 +232,7 @@ def BenchmarkMain(nthreads = None):
         print("refsol= ",refsol)
             
         sim_test_name = f"2DMU_PR_DSPAR{nthreads}_NsVsErrs_M{M}"
-        resultsDS = run_convergence_sweep_MU(Ns,("PR-Dimensional Split with paralellization", PRCoolingCycle2), cfg,refsol = refsol)
+        resultsDS = run_convergence_sweep_MU(Ns,("PR-DS_Numba_Para", PRCoolingCycle2), cfg,refsol = refsol)
         resdf = save_results(sim_test_name,resultsDS)
         print(f"Saved results to {sim_test_name}\n",
             "-------- Results : ----------\n",resdf)
@@ -309,50 +301,45 @@ def ErrTableN(M, Ns):
 
 def BenchmarkAlt():
 
-    Ns = np.array([100 * i for i in [1,2,4,8,16]])
+    Ns = np.array([100 * i for i in range(1,16)])
     M = 512
-    cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3)
+    cfg = build_sim(N=Ns[0], Mx = M,My= M, Mz = M, t_pulse= 1.5e-3, sigmax= 2, sigmay = 2)
+    # hardcoded
+    cfg.target.dEdz = 1.67 * 1e6    
     print(f"Trial for M = {M} and Ns = {Ns}")
     print("------Pause time is:", cfg.time.t_pause, "-----\n")
     
     refsol = f"MU_refsol_M{M}_N100000_T"
    
    
-    print("Using refsol : ", refsol)
-    sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
-    resultsDS = run_convergence_sweep_MU(Ns,("PR-Boundary Split", PRCoolingCycle), cfg,refsol=refsol)
-    resdf = save_results(sim_test_name,resultsDS)
-    print(f"Saved results to {sim_test_name}\n",
-    "-------- Results : ----------\n",resdf)
+    # print("Using refsol : ", refsol)
+    # sim_test_name = f"2DMU_PR_BS_NsVsErrs_M{M}"
+    # resultsDS = run_convergence_sweep_MU(Ns,("PR-BS", PRCoolingCycle), cfg,refsol=refsol)
+    # resdf = save_results(sim_test_name,resultsDS)
+    # print(f"Saved results to {sim_test_name}\n",
+    # "-------- Results : ----------\n",resdf)
 
-    print("refsol= ",refsol)
-    sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
-    results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
-    resdf = save_results(sim_test_name, results)
-    print(f"Saved results to {sim_test_name}\n",
-        "-------- Results : ----------\n",resdf)
+    # print("refsol= ",refsol)
+    # sim_test_name = f"2DMU_TRAP_NsVsErrs_M{M}"
+    # results = run_convergence_sweep_MU(Ns,("Trapezoidal Rule",TrapCoolingCycle), cfg,refsol = refsol)
+    # resdf = save_results(sim_test_name, results)
+    # print(f"Saved results to {sim_test_name}\n",
+    #     "-------- Results : ----------\n",resdf)
     print("Using refsol : ", refsol)
+
     sim_test_name = f"2DMU_PR_DS_NsVsErrs_M{M}"
-    results = run_convergence_sweep_MU(Ns,("PR-Dimensional Split", PRCoolingCycle2), cfg,refsol = refsol)
+    results = run_convergence_sweep_MU(Ns,("PR-DS CG",partial(PRCoolingCycle2, solver="CG" )), cfg,refsol = refsol)
     resdf = save_results(sim_test_name,results)
     print(f"Saved results to {sim_test_name}\n",
     "-------- Results : ----------\n",resdf)
 
 if __name__ == "__main__":   
 
-    # BenchmarkAlt()
-
-    # u_ref = np.loadtxt("./benchmarks/data/MU_refsol_M512_N100000_T", skiprows=1)
-   
-
+    
     M = 512
-    # BenchmarkAlt()
-    NS = [100,200,400,800,1600]
-    sErrors = ErrTableN(M,NS)
-    print(sErrors)
-    # PlotEfficiency(M)
-    # PlotMain(M)
-    # CalcTime()
+    PlotMain(M)
+    PlotMain(M,1)
+
     # nthreads = 1
     # BenchmarkMain(nthreads)
     # nthreads = 2
@@ -361,12 +348,17 @@ if __name__ == "__main__":
     # BenchmarkMain(nthreads)
     # nthreads = 8
     # BenchmarkMain(nthreads)
-    # simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
-
-    # simnames = [f"2DMU_PR_DSPAR1_NsVsErrs_M{M}",f"2DMU_PR_DSPAR2_NsVsErrs_M{M}",f"2DMU_PR_DSPAR4_NsVsErrs_M{M}",f"2DMU_PR_DSPAR8_NsVsErrs_M{M}"]
-
+    # BenchmarkAlt()
+    # u_ref = np.loadtxt("./benchmarks/data/MU_refsol_M512_N100000_T", skiprows=1)
+    
+    # BenchmarkAlt()
+    # NS = [100,200,400,800,1600]
+    # sErrors = ErrTableN(M,NS)
+    # print(sErrors)
+    
     # PlotEfficiency(M)
     
+    # CalcTime() 
    
     # resdf = read_results(f"2DMU_PR_BS_NsVsErrs_M{M}",f"20261008_205518", root = "./data")
     # print("new results\n",resdf)
