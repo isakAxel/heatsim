@@ -15,8 +15,17 @@ dependencies = [
     "jax",
     "numba",
     "mayavi",
-    "PyQt5"
+    "PyQt5",
+    "python-dotenv",
+    "h5py",
+    "pysrim",
+    "setuptools",
 
+    ]
+
+[project-optional-dependencies]
+dev = [
+	"snakeviz",
 ]
 
 [build-system]

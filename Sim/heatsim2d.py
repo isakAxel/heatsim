@@ -58,7 +58,8 @@ def ImkF1(v,k,F1,dF1,cfg) -> np.array:
     This is done to effectively approximate the inverse, to reduce compute cost. 
 
     """
-
+    tol = 1e-13
+    # tol = cfg.time.tol
     if hasattr(v, "toarray"):
         u = v = v.toarray()  
     else:
@@ -73,8 +74,8 @@ def ImkF1(v,k,F1,dF1,cfg) -> np.array:
         du = (u-k/2*F1u.toarray()-v) / (1-k/2 * dF1u.toarray())
         u = u - du
         # Convergence check / stopping crit
-        norm_du = cfg.space.hx**(1/2)*linalg.norm(du,2)
-        if norm_du < cfg.time.tol :
+        norm_du = cfg.space.hx*linalg.norm(du,2)
+        if norm_du < tol :
             break
     return u
 
@@ -226,8 +227,12 @@ def TrapBasic(u0, Laplaceh, F1, F2, cfg):
 
 plot_option = 1
 if __name__ == "__main__":
-    
-    cfg = build_sim(N = 50, Mx = 50, Lz = 0.1, p  = 10, p_freq=14)
+
+    M = 70
+    N = 100
+    cfg = build_sim(N = 100, Mx = 100, Lz = 0.1, p  = 10, p_freq=14)
+    # 2D model -- Average the stopping power throughout Z
+    cfg.target.dEdz  =  np.mean(cfg.target.dEdz[1])
     M = cfg.space.Mx
     N = cfg.time.N
     ### Printing parameters for simulation
@@ -248,8 +253,6 @@ if __name__ == "__main__":
         f"T0 : {cfg.T0}\n")
 
 
-    dP = cfg.target.rho * cfg.beam.Ib * cfg.target.dEdz
-    print("dP : ",dP)
   
     # Creating Linear operators I and discrete Laplaceian Lh
     Lh = DiscLaplacian(cfg)
@@ -258,25 +261,24 @@ if __name__ == "__main__":
     u0 = np.zeros(M**2)
     # Running modified PR and IE solver to compare
     print(f"CFL Number for simulation: CFL = {cfg.time.k_pause/(cfg.space.hx**2)}")
-    u = TrapBasic(u0,Lh,F1,F2,cfg,cpuprf = True)    
     u2 = modPRSolver(u0,Lh,F1,F2,cfg, cpuprf = True)
     ####   
     ##### Temporary plot to see results ####
 
     # Arbitrarily chosen temperature vector  
-    uN = u[:,N+1]
+    
     u2N = u2[:,N+1]
 
     # Absoltute and rel error
-    err2Norm = linalg.norm(uN - u2N, 2) * cfg.space.hx 
-    print(f"Timestep are kpulse:{cfg.time.k_pulse} and kpause = {cfg.time.k_pause}")
-    print(f"Error at Time step N: {err2Norm}")
-    relerr = err2Norm / np.linalg.norm(uN)
-    print(f"Relative L2 Error: {relerr:.4e}")
+    # err2Norm = linalg.norm(uN - u2N, 2) * cfg.space.hx 
+    # print(f"Timestep are kpulse:{cfg.time.k_pulse} and kpause = {cfg.time.k_pause}")
+    # print(f"Error at Time step N: {err2Norm}")
+    # relerr = err2Norm / np.linalg.norm(uN)
+    # print(f"Relative L2 Error: {relerr:.4e}")
 
     xs = np.linspace(0,cfg.space.Lx,M+2)
     x,y = np.meshgrid(xs,xs)
-
+ 
     mat = np.zeros((M+2,M+2), dtype = np.float32)
     mat[1:M+1,1:M+1] = u2[:,-1].reshape(M,M)
 

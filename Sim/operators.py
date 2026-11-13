@@ -87,8 +87,8 @@ def F1(v,cfg,fq = None) -> sparse.sparray:
     # Get params from cfg
     T0 = float(cfg.T0)
     rho, C_p = cfg.target.rho, cfg.target.C_p
-    sigma, epsilon = cfg.sigma, cfg.target.epsilon
-    gamma = cfg.target.gamma
+    sigma, epsilon = cfg.sigma, cfg.target.epsilon1
+    gamma = cfg.target.gamma1
     
     c_bolt = sigma*epsilon/rho/C_p 
     c_newton = gamma/rho/C_p
@@ -96,7 +96,14 @@ def F1(v,cfg,fq = None) -> sparse.sparray:
         hz = cfg.space.hz
         ### TODO: idx optimization precompute
         #
-        idx = fq.nonzero()[0]
+        idx = fq.nonzero()[0]          # entries with fq == 0 are not included
+        is1 = fq.data == 1             # same order as idx; everything else is treated as 2
+        gamma = np.where(is1, cfg.target.gamma1, cfg.target.gamma2)
+        epsilon = np.where(is1, cfg.target.epsilon1, cfg.target.epsilon2)
+
+        c_bolt = sigma*epsilon/rho/C_p 
+        c_newton = gamma/rho/C_p
+
         fu = fq.copy()
         fu.data = -(c_bolt*(((v[idx]+T0)/100.0)**4-(T0/100.0)**4) + c_newton*v[idx]) * 2/hz
         return fu
@@ -115,19 +122,20 @@ def dF1(v,cfg,fq = None) -> sparse.sparray:
 
     T0 = float(cfg.T0)
     rho, C_p = cfg.target.rho, cfg.target.C_p
-    sigma, epsilon = cfg.sigma, cfg.target.epsilon
-    gamma = cfg.target.gamma
-
+    sigma, epsilon = cfg.sigma, cfg.target.epsilon1
+    gamma = cfg.target.gamma1
     # Coefficients
     c_bolt =sigma*epsilon/rho/C_p
     c_newton = gamma /rho/C_p
-    
     if fq is not None:
         hz = cfg.space.hz
         # Try this for optimizing Later
-        # if idx is None:
-            # idx = fq.nonzero()[0]
-        idx = fq.nonzero()[0]
+        idx = fq.nonzero()[0]          # entries with fq == 0 are not included
+        is1 = fq.data == 1             # same order as idx; everything else is treated as 2
+        gamma = np.where(is1, cfg.target.gamma1, cfg.target.gamma2)
+        epsilon = np.where(is1, cfg.target.epsilon1, cfg.target.epsilon2)
+        c_bolt = sigma*epsilon/rho/C_p 
+        c_newton = gamma/rho/C_p
         fu = fq.copy()
         fu.data = (-4*c_bolt*((v[idx]+T0)/100)**3 *1/100 - c_newton) * 2/hz 
         return fu 
@@ -212,6 +220,15 @@ def P_bragg(z, dEdz_0, r0, h_cut=None, peak=3.5):
     cutoff = expit(-(z - r0) / w)
     return dEdz_0 * peak_h * cutoff
 
+def P_bragg_cons(z,dEdz):
+    """
+    Constant depth-dose profile of proton beam. Recast as a ndarray in z-direction
+    
+    Params:
+        z (ndarray) : Discretized points in z-direction (Proton beam incident direction)
+        dEdz(float) : The constant stopping power of the material given in [MeV cm^2 / g]
+    """
+    return np.full_like(z,dEdz, dtype=float)
 
 def F2_xz(cfg, r0=3.4):
     """
@@ -222,7 +239,7 @@ def F2_xz(cfg, r0=3.4):
     hx = cfg.space.hx
     Lx, Lz = cfg.target.Lx, cfg.target.Lz
     C_p = cfg.target.C_p
-    dEdz = cfg.target.dEdz
+    dEdz = cfg.target.dEdz[1][0]
     Ib, sx, sy = cfg.beam.Ib, cfg.beam.sigmax, cfg.beam.sigmay
 
     xs = np.linspace(hx, hx * Mx, Mx)          # interior points in x
@@ -231,7 +248,8 @@ def F2_xz(cfg, r0=3.4):
 
     cx = Lx / 2
     braggc = P_bragg(z, dEdz, r0)
-    dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2 / sx**2) * braggc
+    # Using GaussianBeam profile
+    dP = Ib * braggc / C_p *  GaussianBeam(x,0,cx,0,sx,sy)
     return dP.reshape(-1)
 
 def F2_xyz(cfg,beam_mode="Gaussian", r0=3.4):
@@ -243,7 +261,7 @@ def F2_xyz(cfg,beam_mode="Gaussian", r0=3.4):
     hx,hy  = cfg.space.hx, cfg.space.hy
     Lx, Ly, Lz = cfg.target.Lx,cfg.target.Ly, cfg.target.Lz
     C_p = cfg.target.C_p
-    dEdz = cfg.target.dEdz
+    dEdz = cfg.target.dEdz[1][0]
     Ib, sx, sy = cfg.beam.Ib, cfg.beam.sigmax, cfg.beam.sigmay
 
     xs = np.linspace(hx, hx * Mx, Mx)          # interior points in x,y
@@ -256,6 +274,45 @@ def F2_xyz(cfg,beam_mode="Gaussian", r0=3.4):
     braggc = P_bragg(z, dEdz, r0)
     dP = braggc * Ib / C_p
     if beam_mode == "Gaussian":
-        u = dP * np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) / ( 2 * np.pi * sx * sy)
+        u = dP * GaussianBeam(x,y,cx,cy,sx,sy)
     # dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) * braggc
     return u.reshape(-1)
+
+def F2_xyz_MC(cfg,beam_mode="Gaussian"):
+    """
+    Beam heating term dT/dt on the Mx x My x (Mz+2) grid 
+    with index = (ix*My + iy)*(Mz+2) + iz
+    """
+    Mx, Mz,My = cfg.space.Mx, cfg.space.Mz, cfg.space.My
+    hx,hy  = cfg.space.hx, cfg.space.hy
+    Lx, Ly, Lz = cfg.target.Lx,cfg.target.Ly, cfg.target.Lz
+    C_p = cfg.target.C_p
+    Ib, sx, sy = cfg.beam.Ib, cfg.beam.sigmax, cfg.beam.sigmay
+
+    xs = np.linspace(hx, hx * Mx, Mx)          # interior points in x,y
+    ys = np.linspace(hy,hy * My, My) 
+    zs = np.linspace(0, Lz, Mz + 2)            # includes both z boundaries
+    x,y,z = np.meshgrid(xs,ys,zs, indexing ="ij")  # Change reference definition
+
+    cx = Lx / 2
+    cy = Ly / 2
+    # Bragg peak prfile
+    zsrc = cfg.target.dEdz[0] * 1e-8 
+    ysrc = cfg.target.dEdz[1]
+    braggc = np.interp(zs,zsrc,ysrc)
+    dP = braggc * Ib / C_p
+    if beam_mode == "Gaussian":
+        u = dP * GaussianBeam(x,y,cx,cy,sx,sy)
+    # dP = Ib / C_p / sx / 2 / np.pi / sy * np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) * braggc
+    return u.reshape(-1)        
+
+"""
+    Beam modes specifications
+"""
+
+def GaussianBeam(x,y,cx,cy,sx,sy):
+    """
+        Returns a gaussian beam profile for discretized x,y-values x and y
+
+    """
+    return np.exp(-((x - cx)**2) / 2/ sx**2 - ((y-cy)**2)/2 /sy**2) / ( 2 * np.pi * sx * sy)

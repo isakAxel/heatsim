@@ -7,7 +7,16 @@ from mayavi import mlab
 This is a module for plotting the simulations WIP
 """
 
-def plot_errors(res: list, methods : list, title,fname = "logerrs",ylim = None,norm = fr'$L_2$',root = f"./benchmarks/data/error_plots/NormErrs"):
+# Control font size for visibility
+plt.rcParams.update({
+    "font.size": 12,           # default for anything not set below
+    "axes.titlesize": 16,      # 
+    "axes.labelsize": 14,    
+    "xtick.labelsize": 12,    
+    "ytick.labelsize": 12,     
+    "legend.fontsize": 12,    
+})
+def plot_errors(res: list, methods : list, title,fname = "logerrs",ylim = None,norm = fr'$l_2$',root = f"./benchmarks/data/error_plots/NormErrs"):
     """
         Plots the errors as a function of the time step size k (k_pause).
     """
@@ -20,9 +29,9 @@ def plot_errors(res: list, methods : list, title,fname = "logerrs",ylim = None,n
     for res,ax,met in zip(res,axes,methods):
         k = res['k_pause']
 
-        if norm == fr'$L_2$':
+        if norm == fr'$l_2$':
             errs = res['errs']
-        elif norm == fr'$L_\infty$': 
+        elif norm == fr'$l_\infty$': 
             errs = res['err_Linf']
         else:
             print("Norm is not defined/logged")
@@ -33,7 +42,8 @@ def plot_errors(res: list, methods : list, title,fname = "logerrs",ylim = None,n
         errs = np.asarray(errs)
 
         ax.loglog(k, errs, 'rx')
-        ax.set_title(f"Using: {met}")
+    
+        ax.set_title(f"{met}")
 
         # 2. Extract first marker as the common origin point
         x0, y0 = k[0], errs[0]
@@ -63,10 +73,9 @@ def plot_errors(res: list, methods : list, title,fname = "logerrs",ylim = None,n
         ax.grid(True,which='both')
         ax.legend()
 
-    fullpath = f"{root}/{fname}"
-    fig.savefig(fullpath)
-    print(f"Saved figure to: {fullpath}")
-
+    # fullpath = f"{root}/{fname}"
+    # fig.savefig(fullpath)
+    save_figure(fig,root,fname)
 
 def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency", root = f"./benchmarks/data/error_plots/EFFICIENCY"):
     
@@ -85,26 +94,50 @@ def plot_efficiency(res : list, methods : list, title,M,fname = "logefficiency",
     """
 
     fig,ax = plt.subplots(figsize = (17,8))
-
-    for r,met in zip(res,methods):
+    # markers = ["o", "s", "^", "D",'x','x','x','x','x','x','x']
+    markers = ["o", "s", "^", "D","P", "h","v",'x','x','x','x']
+    for r,met,marker in zip(res,methods,markers):
         
         time = r['time']
         errs = r['errs']
 
-        ax.loglog(time,errs, 'x--', label = f"{met}")
-
+        # ax.plot(time,errs, 'x--', label = f"{met}")
+        ax.plot(time, errs, marker=marker, linestyle='--', markersize=6, label=f"{met}")
+    
+    # ax.set_yscale('log')
+    if title:
         ax.set_title(f"{title} \n With spatial resolution M = {M}")
 
-        ax.set_xlabel("Time t for simulation in seconds")
-        ax.set_ylabel(rf"Error $L_2$-Norm")
-        ax.grid(True, which = 'both') 
+    ax.set_xlabel("Time t for simulation in seconds")
+    ax.set_ylabel(rf"Error $l_2$-Norm")
+    ax.grid(True, which = 'both') 
         
-        ax.legend()
-        
-    fullpath = f"{root}/{fname}"
-    fig.savefig(fullpath)
-    print(f"Saved figure to: {fullpath}")
+    ax.legend()
 
+    # fullpath = f"{root}/{fname}"
+    # fig.savefig(fullpath)
+    save_figure(fig,root,fname)
+
+def save_figure(fig,root,fname):
+
+    base, ext = os.path.splitext(fname)
+
+    # First try the original path, then name(1).ext, name(2).ext, ...
+    candidates = [os.path.join(root, f"{base}{ext}")]
+    candidates += [os.path.join(root, f"{base}({i}){ext}") for i in range(1, 10)]
+
+    last_error = None
+    for fullpath in candidates:
+        try:
+            fig.savefig(fullpath, dpi=300, bbox_inches="tight")
+            print(f"Saved figure to: {fullpath}")
+            return fullpath
+        except Exception as e:
+            last_error = e
+            print(f"Could not save to {fullpath}: {e}")
+    raise RuntimeError(f"Failed to save figure after {len(candidates)} attempts") from last_error
+
+    
 def plot_BeamInt3D(cfg, u_vec, title, method, mark_max=False, save_fig=False,
                    frac=0.1, step=1):
     """
@@ -200,7 +233,16 @@ def plot_3D(cfg,u,title, method):
     title.property.font_family = font
     mlab.show()
 
+def plot_T_evol(cfg,T,ts,title="Temperature evolution", **kwargs):
 
+    fig,ax = plt.subplots(figsize= (10,8))
+    ax.plot(ts,T,**kwargs)              # depth in µm
+    
+    ax.set_xlabel("Time t [s]")
+    ax.set_ylabel("Temperature")
+    ax.set_title(title)
+    ax.legend()
+    fig.show()
 
 def plot_2D_field(cfg,u,title,method,mark_max=False, save_fig = False,axes=("x","y")):
     
@@ -236,7 +278,7 @@ def plot_Ds(x,ys, labels, title = f"Electronic stopping power"):
         ax.plot(x,y,label = lab)              # depth in µm
     ax.set_xlabel("Depth [Å]")
     ax.set_ylabel(r"$S_e$ (MeV cm$^2$/g)")
-    ax.set_ylim(0,np.max(y)*1.1)
+    ax.set_ylim(0,np.max(ys)*1.1)
     ax.set_title(title)
     ax.legend()
     plt.show()

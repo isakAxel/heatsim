@@ -2,8 +2,6 @@
 
 heatsim is a Python project for simulating transient heat conduction in solid targets exposed to pulsed proton beams, developed in the context of the European Spallation Source (ESS) in Lund, Sweden.
 
-> **Note:** This repository is a GitHub mirror of the project's GitLab repository. The GitLab repository is the primary source.
-
 The main goal is to evaluate time-splitting schemes for the heat equation, in particular Peaceman-Rachford (PR) splitting, and to obtain accurate and efficient temperature estimates that support beam diagnostics at ESS. Accurate temperature fields help interpret beam-induced heating, validate beam parameters, and assess the thermal behavior of target materials under operating conditions.
 
 > **Status:** This project is under active development. Interfaces, file layout, and numerical methods may change, and results should be treated as preliminary until they have been validated against reference solutions.
@@ -42,7 +40,6 @@ The main goal is to evaluate time-splitting schemes for the heat equation, in pa
   - README.md
 
 
-## Installation
 ## Contact
 
 heatsim is developed in connection with a Master's thesis project at ESS and LTH. The people involved are:
@@ -52,21 +49,31 @@ heatsim is developed in connection with a Master's thesis project at ESS and LTH
 - Eskil Hansen, Supervisor, LTH
 
 ## Installation
-Dependencies are declared in `pyproject.toml`.
+Python dependencies are declared in `pyproject.toml`.
 
 Clone the repository and install the package in editable mode from the repository root:
 
 ```bash
 pip install -e .
 ```
+For simulated stopping powers to be used the software SRIM is needed. SRIM is an older software created for windows, so for MacOS and Linux the install must be made via wine.
+
+Read more about the SRIM install here:  http://www.srim.org/
+
+Read more about SRIM's python usability here: https://pysrim.readthedocs.io/en/latest/
+
+**Note:** For pysrim and SRIM compatibility, save SRIM output with American number formatting, using a period (.) as the decimal separator, not a comma.
+
+Finally an .env file needs to be setup to run SRIM, look at the file .env.example to see what has to set up in order to run SRIM with heatsim.
+
 ## Usage
 
 Run a simulation as a module from the repository root:
 
 ```bash
-python -m Sim.heatsim2dMU
+python -m Sim.heatsim3d
 ```
-
+Simulation modules are found in the Sim folder, named `heatsim3d` and `heatsim2d`
 Default simulation parameters are set within the config.py module but a custom SimulationSetup object can be created with constructor. Plots are shown on screen by default.
 
 ## Development notes

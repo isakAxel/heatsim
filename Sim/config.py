@@ -3,7 +3,7 @@ from .utils import utils as ut
 
 MeV = 1e6
 mA = 1e-3
-@dataclass(frozen = True)
+@dataclass
 class TargetMaterial:
     rho : float
     C_p : float
@@ -11,9 +11,11 @@ class TargetMaterial:
     Ly : float
     Lz : float
     dEdz : float
-    epsilon : float
+    epsilon1 : float
+    epsilon2 : float
     D : float
-    gamma : float
+    gamma1 : float
+    gamma2 : float
     material : str = 'Al'
     
     @property
@@ -23,13 +25,16 @@ class TargetMaterial:
     def V(self) -> float:
         return self.A * self.Lz
     @classmethod
-    def from_material(cls, Ep, material = 'Al',Lx=10.0, Ly=10.0, Lz=5.0, gamma=5.0):
-        D, rho, C_p,epsilon = ut.import_mat_data(material)
+    def from_material(cls, Ep, material = 'Al',Lx=10.0, Ly=10.0, Lz=5.0, gamma1=5.0,gamma2 = 0.0,epsilon2 = 0.0):
+        D, rho, C_p,epsilon1 = ut.import_mat_data(material)
         # dEdz = ut.import_PSTAR_data(material,Ep)
         # TODO: Hardcoded dEdz
-        dEdz = 1.67*MeV
-        return cls(rho=rho, C_p=C_p, Lx=Lx, Ly=Ly, Lz=Lz, dEdz=dEdz,
-                   epsilon=epsilon, D=D, gamma=gamma, material=material)
+        # dEdz = 1.67*MeV
+        dz,dEdz = ut.calculate_stoppingpower(material,Ep,Lz,rho,ions=100)
+        dEdz = ut.SoftSmooth(dEdz) * MeV
+
+        return cls(rho=rho, C_p=C_p, Lx=Lx, Ly=Ly, Lz=Lz, dEdz=(dz,dEdz),
+                   epsilon1=epsilon1,epsilon2 = epsilon2, D=D, gamma1=gamma1,gamma2=gamma2, material=material)
 
 @dataclass(frozen = True)
 class BeamParameters():
@@ -84,7 +89,7 @@ class TemporalParams:
     t_pause : float
     N : int = 100
     maxit : int = 200
-    tol : float = 1e-13
+    tol : float = 1e-12
    
 
     @property
@@ -111,7 +116,9 @@ def build_sim(
     Lx: float = 10.0,
     Ly: float = 10.0,
     Lz: float = 7.0,
-    gamma: float = 5.0,
+    gamma1: float = 5.0,
+    gamma2: float = 0.0,    
+    epsilon2: float = 0.0,
     # --- beam ---
     p_freq: float = 1.0,
     p: int = 1,
@@ -143,7 +150,7 @@ def build_sim(
     use dataclasses.replace) rather than mutating cfg.space in place.
     """
     target = TargetMaterial.from_material(
-        Ep, material, Lx=Lx, Ly=Ly, Lz=Lz, gamma=gamma,
+        Ep, material, Lx=Lx, Ly=Ly, Lz=Lz, gamma1=gamma1,gamma2 = gamma2,epsilon2 = epsilon2
     )
 
     beam = BeamParameters.from_target(

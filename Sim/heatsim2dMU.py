@@ -232,7 +232,7 @@ JAX = 1
 fast = 1
 @timer()
 @cpuprf
-def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
+def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0, solver = "Numba"):
     """
     Dimensional splitting  Lx  /  (Lz + F1_q):
 
@@ -273,16 +273,25 @@ def PRCoolingCycle2(v0, Lx, Lzs, fq, cfg,history = 0):
         # tf = time.perf_counter()
         # (I - k/2 Lz - k/2 F)^-1
 
-        if JAX == 1:
+        if solver == "Numba":
             if(False):
                 print(f"Time for lux solve : { tf - t0}")
                 wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
             else:
                 wn = IkFLz_JAX(v,k,Lzs,fq,cfg)
-        elif (fast == 1):
-            wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
-        else:
+        elif(solver == "CG"):
             wn = IkFLz(v, k, Lzb, fq, cfg)
+        
+        # if JAX == 1:
+        #     if(False):
+        #         print(f"Time for lux solve : { tf - t0}")
+        #         wn = timed_newton(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+        #     else:
+        #         wn = IkFLz_JAX(v,k,Lzs,fq,cfg)
+        # elif (fast == 1):
+        #     wn = IkFLz_fast(v,k,Lzs,(sparse.eye_array(Mz+2, Mz+2) - k/2 * Lzs),fq,cfg)
+        # else:
+        #     wn = IkFLz(v, k, Lzb, fq, cfg)
         
         if history:
             w[:, n + 1] = wn
@@ -488,9 +497,9 @@ def plot_compare(cfg, ua, ub, labels=("Dimensional split", "Boundary split")):
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     plot_option = 1
-    M = 230
+    M = 200
     Mz = My = Mx = M
-    cfg = build_sim(N=200, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
+    cfg = build_sim(N=100, Mx=M, Mz=M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
     Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
     h = cfg.space.hx
 
@@ -510,7 +519,7 @@ if __name__ == "__main__":
           f"Time without pulse (Pause length): {cfg.time.t_pause}\n",
           f"Density rho : {cfg.target.rho}\n",
           f"Specific Heat Cp: {cfg.target.C_p}\n",
-          f"Stopping power dEdz: {cfg.target.dEdz:.2E}\n",
+          f"Stopping power dEdz: {np.mean(cfg.target.dEdz[1]):.2E}\n",
           f"Peak current Ib : {cfg.beam.Ib}\n",
           f"Sigmax : {cfg.beam.sigmax} \n",
           f"Sigmay : {cfg.beam.sigmay} \n",
@@ -545,23 +554,11 @@ if __name__ == "__main__":
     u = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
     
     
-    # u2 = TrapCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
+    u2 = TrapCoolingCycle(v0, Lx_s, Lz_s, fq1d, cfg,cpuprf = True)
     # u3 = PRCoolingCycle2(v0,Lx_s,Lz_s,fq1d,cfg, cpuprf = True)
     
-    print("Using 4 threads")
-    numba.set_num_threads(4)
-    print("Numba uses:", numba.get_num_threads())
-    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg)
-     
     
-  
-    
-    numba.set_num_threads(8)
-    u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
-
-    numba.set_num_threads(2)
-    u2 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq1d, cfg, cpuprf = True)
-    
+   
 
     # u3 = PRCoolingCycle2(v0, Lx_s, Lz_s, fq, cfg)
     
@@ -587,6 +584,6 @@ if __name__ == "__main__":
     #                "TRAP",
     #                mark_max=True)
 
-    plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Boundary Split'))
+    plot_compare(cfg,u,u2,labels = ('Dimensional Split', 'Trap no split'))
     # plot_compare(cfg,u3,u,labels = ('Dimensional Split', 'Trap no split'))
 
