@@ -9,7 +9,7 @@ from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
 
 from Sim.config import build_sim
-from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz
+from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz, lambda_xyFFT,fft_apply
 from Sim.utils.profiling import timer,cpuprf
 import Sim.visual as vis
 from Sim.solvers import thomasMethodJAX,thomasMethodJ,thomasMethodJ2
@@ -205,10 +205,64 @@ def PRCoolingCycleDS_3split(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
             w[:,n+1] = wn
     return w if history else wn
 
+def PRCoolingCycleDS_FFT(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
+    """
+        Dimensional Split with FFT-in-plane:
+            Experimental method that uses intial strang splitting for the exact operator,
+            followed by a mixed FFT and trapezoidal step update. FFT in x-,y-directions, 
+            and trapezoidal method for Z-line.
+
+            u_n+1 = FFT(k/2 *v0,(x,y))(I - k/2*Fz)^-1(I + k/2*Fz) FFT(k/2 *v0,(x,y))
+            u_n+1 = 
+            Lx and Ly are "elevated" 3d Matrices, and Lzs is small
+    """
+    # Extracting parameters
+    N = cfg.time.N
+    k = cfg.time.k_pause
+    Mx,My,Mz = cfg.space.Mx,cfg.space.My,cfg.space.Mz
+    hx,hy = cfg.space.hx,cfg.space.hy
+    D = cfg.target.D
+
+    Lzb = sparse.kron(sparse.kron(sparse.eye_array(Mx, format="csr"), sparse.eye_array(My, format="csr"), format="csr"), Lzs, format="csr")
+
+    print("------ Cooling Cycle Dimensional Split - Strang(FDM) with FFT  --------")
+    if history:
+        w = np.zeros((Mx*My*(Mz+2), N + 1))
+        w[:, 0] = v0.copy()
+
+    Vn = v0.reshape(Mx,My,Mz).copy()
+    idx = fq.nonzero()[0]
+
+    # Fourier modes for periodic laplacian
+    Lx,Ly = np.zeros(Mx),np.zeros(My)
+    Lx[0],Ly[1],Ly[-1] = -2,1,1
+    Ly[0],Ly[1],Ly[-1] = -2,1,1
+    # comput eigenvalues
+    lam_xy_elev = lambda_xyFFT(Lx, hx, Ly, hy)[:, :, None] 
+    for n in range(N):
+        if n == 0:
+            # Returns into spatial domain
+            Vn = fft_apply(Vn,Mx,My,D,k/2)
+
+        # Apply Exp step
+        vn = Vn.reshape(-1)
+        vn2 = vn + k/2*(Lzb@vn)
+        vn2[idx] += k/2 * F1(vn,cfg,fq).data
+
+        # Apply Implicit step
+        vn2 = IkFLz3D_Numba(vn2,k,Lzs,fq,cfg)
+        Vn = vn2.reshape(Mx,My,Mz)
+
+        if n == (N - 1):
+            V_final = fft_apply(Vn,Mx,My,D,k/2) 
+        else:
+            Vn = fft_apply(Vn,Mx,My,D,k)    
+    return V_final.reshape(-1)
+
 if __name__ == "__main__":
         
         plot_option = 1
-        M = 256 
+        M = 100 
         Mz = My = Mx = M
         cfg = build_sim(N=100, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2)
         Mx, Mz, N = cfg.space.Mx, cfg.space.Mz, cfg.time.N
@@ -254,7 +308,7 @@ if __name__ == "__main__":
         
         # vis.plot_3D(cfg,v0, f"Initial temperature after heating cycle", "-")
         u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "N", cpuprf = True)
-        u2 = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "J",cpuprf = True)
+        u2 = PRCoolingCycleDS_FFT(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "N",cpuprf = True)
         
         # u2 = PRCoolingCycleDS_3split(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, timeit = False)
         # u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)

@@ -1,5 +1,6 @@
 import numpy as np
-from scipy import sparse
+from scipy import sparse,fft,linalg
+
 
 """
     Spatial Discretization
@@ -134,6 +135,59 @@ def dF1(v,cfg,fq = None) -> sparse.sparray:
         A,V = cfg.target.A, cfg.target.V
         u = -(4*c_bolt*((v + T0)/100)**3 * 1/100 + c_newton ) * A/V ### Element wise power ### extra factor 100 here
         return sparse.csr_array(u)
+
+# ----------------------------------------------------------------------
+# FFT Stuff
+# ----------------------------------------------------------------------
+def lambda_1DFFT(c,h):
+    """
+        Retrieve the eigenvalues from the first fourier node of the discrete laplacian c
+
+        Params:
+            c (ndarray)
+
+    """
+    tol = 1e-13
+    c = np.asarray(c,dtype = float)
+    lam = fft.fft(c)
+    # Warn when not symmetric
+    if linalg.norm(lam.imag,order = 2) > tol:
+        print("Warning: Imaginary values are greater than 0")
+    return lam.real / h**2
+
+def lambda_xyFFT(cx,hx,cy,hy):
+    """
+
+    """
+    lam_x = lambda_1DFFT(cx,hx)
+    lam_y = lambda_1DFFT(cy,hy)
+
+    lam_xy = lam_x[:, None] + lam_y[None, :]  
+
+    return lam_x
+
+
+def fft_apply(U,lamxy,Mx,My,D,dt):
+    """
+        Computes a discrete fourier transform on the temperature distribution U, to then apply the eigen values of the
+        laplace "solution" operator, to then transform back to the spatial domain before returning the temperature distribution.
+        
+        Periodic boundary conditions are assumed as of now and the function is hard-coded for 2D slices of the ordering of U.
+
+        Params:
+            U (ndarray) : 3D - temperature grid with shapes (mx,my,mz)
+            lamxy(ndarray) : 3D array of the eigenvalues
+            Mx (int) : "spatial" resolution in x
+            My (int) : same
+            D (float) : The thermal diffusivity constant
+            dt(float) : the time step to solve for (analagous to k)
+    """
+    U_hat = fft.fft2(U,axes = (0,1))
+    U_hat *= np.exp(D * lamxy*dt)
+    U = fft.ifft2(U_hat,axes = (0,1)).real
+    return U
+   
+
 
 # ----------------------------------------------------------------------
 # Beam source in the x-z plane
