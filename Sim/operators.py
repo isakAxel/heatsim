@@ -159,23 +159,23 @@ def lambda_1DFFT(c,h):
     c = np.asarray(c,dtype = float)
     lam = fft.fft(c)
     # Warn when not symmetric
-    if linalg.norm(lam.imag,order = 2) > tol:
+    if linalg.norm(lam.imag, 2) > tol:
         print("Warning: Imaginary values are greater than 0")
     return lam.real / h**2
 
 def lambda_xyFFT(cx,hx,cy,hy):
     """
-
+        Get 2D-eigenvalues from the fourier modes cx,cy - uses the 1D eigenvalues and compiles them.
     """
     lam_x = lambda_1DFFT(cx,hx)
     lam_y = lambda_1DFFT(cy,hy)
 
     lam_xy = lam_x[:, None] + lam_y[None, :]  
 
-    return lam_x
+    return lam_xy
 
 
-def fft_apply(U,lamxy,Mx,My,D,dt):
+def fft_apply(U,lamxy,D,dt):
     """
         Computes a discrete fourier transform on the temperature distribution U, to then apply the eigen values of the
         laplace "solution" operator, to then transform back to the spatial domain before returning the temperature distribution.

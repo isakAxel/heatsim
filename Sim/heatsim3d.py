@@ -8,7 +8,7 @@ from scipy import sparse, linalg, special
 from scipy.sparse.linalg import spsolve, splu,cg, gmres
 
 from Sim.config import build_sim,SimulationSetup
-from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz, lambda_xyFFT,fft_apply
+from Sim.operators import DiscLaplacian1D, F1, dF1,BoundaryConditionNeumann, F2_xyz,F2_xyz_MC, lambda_xyFFT,fft_apply
 from Sim.utils.profiling import timer,cpuprf
 from Sim.utils.utils import save,readh5
 import Sim.visual as vis
@@ -205,6 +205,7 @@ def PRCoolingCycleDS_3split(v0,Lx,Ly,Lzs,fq, cfg, history = 0):
             w[:,n+1] = wn
     return w if history else wn
 
+@timer()
 def PRCoolingCycleDS_FFT(v0,Lx,Ly,Lzs,fq, cfg, history = 0, comp = "N"):
     """
         Dimensional Split with FFT-in-plane:
@@ -219,15 +220,16 @@ def PRCoolingCycleDS_FFT(v0,Lx,Ly,Lzs,fq, cfg, history = 0, comp = "N"):
     # Extracting parameters
     N = cfg.time.N
     k = cfg.time.k_pause
-    Mx,My,Mz = cfg.space.Mx,cfg.space.My,cfg.space.Mz
+    Mx,My,Mz = cfg.space.Mx,cfg.space.My,cfg.space.Mz+2
     hx,hy = cfg.space.hx,cfg.space.hy
-    D = cfg.target.D
+    # Thermal diffusivity
+    D = cfg.target.D / cfg.target.rho / cfg.target.C_p
 
     Lzb = sparse.kron(sparse.kron(sparse.eye_array(Mx, format="csr"), sparse.eye_array(My, format="csr"), format="csr"), Lzs, format="csr")
 
     print("------ Cooling Cycle Dimensional Split - Strang(FDM) with FFT  --------")
     if history:
-        w = np.zeros((Mx*My*(Mz+2), N + 1))
+        w = np.zeros((Mx*My*(Mz), N + 1))
         w[:, 0] = v0.copy()
 
     Vn = v0.reshape(Mx,My,Mz).copy()
@@ -235,14 +237,14 @@ def PRCoolingCycleDS_FFT(v0,Lx,Ly,Lzs,fq, cfg, history = 0, comp = "N"):
 
     # Fourier modes for periodic laplacian
     Lx,Ly = np.zeros(Mx),np.zeros(My)
-    Lx[0],Ly[1],Ly[-1] = -2,1,1
+    Lx[0],Lx[1],Lx[-1] = -2,1,1
     Ly[0],Ly[1],Ly[-1] = -2,1,1
     # comput eigenvalues
     lam_xy_elev = lambda_xyFFT(Lx, hx, Ly, hy)[:, :, None] 
     for n in range(N):
         if n == 0:
             # Returns into spatial domain
-            Vn = fft_apply(Vn,Mx,My,D,k/2)
+            Vn = fft_apply(Vn,lam_xy_elev,D,k/2)
 
         # Apply Exp step
         vn = Vn.reshape(-1)
@@ -254,9 +256,9 @@ def PRCoolingCycleDS_FFT(v0,Lx,Ly,Lzs,fq, cfg, history = 0, comp = "N"):
         Vn = vn2.reshape(Mx,My,Mz)
 
         if n == (N - 1):
-            V_final = fft_apply(Vn,Mx,My,D,k/2) 
+            V_final = fft_apply(Vn,lam_xy_elev,D,k/2) 
         else:
-            Vn = fft_apply(Vn,Mx,My,D,k)    
+            Vn = fft_apply(Vn,lam_xy_elev,D,k)    
     return V_final.reshape(-1)
 
 def _line_tridiag(L, stride, n):
@@ -345,7 +347,13 @@ def PRCoolingCycleDS_3split_Thomas(v0, Lx, Ly, Lzs, fq, cfg, history=0):
     return w if history else wn
 
 
-def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False,save_path = None):
+methods = {
+    "Strang-FDM" : PRCoolingCycleDS_3split_Thomas,
+    "PR-FDM" : PRCoolingCycleDS_Naive,
+    "Strang-Hybrid" : PRCoolingCycleDS_FFT
+}
+
+def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,method = "Strang-FDM",plot_option = False,save_path = None):
     """
         Function that runs the full simulation time T = p*(t_pause + t_pulse) i.e. p pulses with heating and cooling phase.
 
@@ -358,7 +366,7 @@ def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False,save_
             plot_option(boolean) : Option to plot
     """
     #Show bragg peak
-    if plot_option:
+    if 0:
         dz = cfg.target.dEdz[0]
         dE = cfg.target.dEdz[1]
         label = [f"Ep= {cfg.beam.Ep}"]
@@ -377,7 +385,8 @@ def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False,save_
     Fq  = sparse.kron(_onesx, sparse.kron(_onesx,fq_s), format="csr") 
     Ly = sparse.kron(Ix, sparse.kron(Ly_s, Iz),format = "csr")
     Lx = sparse.kron(Lx_s,sparse.kron(Iy,Iz), format = "csr")
-    
+    #Extract Solver
+    solver = methods[method]
     # Initial data
     v = np.zeros(Mx*My*(Mz+2))
     maxT = []
@@ -393,7 +402,7 @@ def HeatIter(cfg : SimulationSetup,Lx_s,Ly_s,Lz_s,fq_s,plot_option = False,save_
         maxT.append(np.max(v))
         ts.append(pk*(t_pulse+t_pause) + cfg.beam.t_pulse)
         # Cooling Cycle
-        v = PRCoolingCycleDS_3split_Thomas(v,Lx,Ly,Lz_s, Fq, cfg,history = 0)
+        v = solver(v,Lx,Ly,Lz_s, Fq, cfg,history = 0)
         maxT.append(np.max(v))
         ts.append((pk+ 1)*(t_pulse+t_pause))
 
@@ -425,11 +434,12 @@ if __name__ == "__main__":
         
         plot_option = 1
         # Resolution parameters
-        M = 50 
-        N = 50
-        Mz = My = Mx = M
+        Mz = 100
+        My = Mx = 100 
+        N = 100
+
         ##  Building the parameter, default parameters are listed in config.py
-        cfg = build_sim(N=N, Mx=M, Mz=M, My = M, t_pulse=1.5e-3,sigmax=2,sigmay=2,p = 5, Ep = 800)
+        cfg = build_sim(N=N, Mx=Mx, Mz=Mz, My = My, t_pulse=1.5e-3,sigmax=2,sigmay=2,p = 1, Ep = 800)
     
         print("---------- Parameters for Simulation -------------\n",
               f"Simulation Material : {cfg.target.material} \n",
@@ -455,16 +465,17 @@ if __name__ == "__main__":
         Lz_s, fq1d = BoundaryConditionNeumann(Lz_s, q0=1, qend=2)
         
         # vis.plot_3D(cfg,v0, f"Initial temperature after heating cycle", "-")
-        u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "N", cpuprf = True)
-        u2 = PRCoolingCycleDS_FFT(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, comp= "N",cpuprf = True)
-        
-        # u2 = PRCoolingCycleDS_3split(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0, timeit = False)
-        # u = PRCoolingCycleDS_Naive(v0,Lx,Ly,Lz_s, Fq, cfg,history = 0,timeit = False)
+        u2 = HeatIter(cfg,Lx_s,Ly_s,Lz_s,fq1d,"Strang-Hybrid",True)
 
-        u_diff = u - u2
+        u = HeatIter(cfg,Lx_s,Ly_s,Lz_s,fq1d,"Strang-FDM",True)
+        
+
+        u_diff = u[0] - u2[0]
+        if plot_option:
+            vis.plot_3D(cfg,u_diff,"Temperature difference for methods", "FDM-FFT /  FFT (M=80)")
 
         # Plotting max slice       
-        if plot_option:
+        if 0:
             u = v.reshape(Mx * My, Mz + 2)        # index = (ix*My + iy)*(Mz+2) + iz
             # Maximum over the xy-plane for each z-slice, then the z-slice with the largest one
             slice_max = u.max(axis=0)
